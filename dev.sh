@@ -75,11 +75,49 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# ----- start load-gen in background first ----------------------------------
+#
+# Starting loadgen first lets it generate the TLS material EDM needs. EDM
+# fails fast on a missing client cert, so we then poll for the keys to exist
+# before starting EDM. Both children get their own process groups via setsid
+# so cleanup can signal each tree independently.
+
+echo "dev.sh: starting load-gen (UI on http://localhost${LOADGEN_LISTEN}/ )..."
+echo "dev.sh: edm-loadgen will generate keys in $KEYS_DIR on first run"
+
+setsid bash -c "
+    exec go run ./cmd/edm-loadgen serve \
+        --listen '$LOADGEN_LISTEN' \
+        --mqtt-listen '$MQTT_LISTEN' \
+        --mqtt-keys-dir '$KEYS_DIR' \
+        --mqtt-node-name '$NODE_NAME' \
+        $(printf "%q " "$@")
+" &
+LOADGEN_PID=$!
+
+# ----- wait for keys before starting EDM -----------------------------------
+
+echo -n "dev.sh: waiting for $KEYS_DIR/client.crt"
+deadline=$(( $(date +%s) + 30 ))
+while [[ ! -f "$KEYS_DIR/client.crt" ]]; do
+    if (( $(date +%s) >= deadline )); then
+        echo
+        echo "dev.sh: timed out waiting for keys; loadgen may have failed" >&2
+        exit 1
+    fi
+    if ! kill -0 "$LOADGEN_PID" 2>/dev/null; then
+        echo
+        echo "dev.sh: loadgen exited before generating keys" >&2
+        exit 1
+    fi
+    echo -n "."
+    sleep 0.5
+done
+echo " ok"
+
 # ----- start EDM in background ---------------------------------------------
 
 echo "dev.sh: starting EDM (logs -> $EDM_LOG) ..."
-# setsid puts go run and the EDM binary it execs into a fresh process group
-# rooted at the go-run pid, so cleanup can kill the whole group.
 setsid bash -c "
     cd '$EDM_SRC' && \
     exec go run ./cmd/dnstapir-edm run \
@@ -96,29 +134,6 @@ setsid bash -c "
         --mqtt-signing-key-file '$KEYS_DIR/jws.key'
 " >"$EDM_LOG" 2>&1 &
 EDM_PID=$!
-
-# EDM dials MQTT very early; if the broker isn't up yet it'll just retry.
-# That's fine — we don't need to gate on EDM being "ready" before starting
-# the load-gen, since the load-gen owns the broker.
-
-# ----- start load-gen in foreground ----------------------------------------
-
-echo "dev.sh: starting load-gen (UI on http://localhost${LOADGEN_LISTEN}/ )..."
-echo "dev.sh: edm-loadgen will generate keys in $KEYS_DIR on first run"
-
-# Run loadgen in its own process group (setsid) so external `kill -INT
-# <script-pid>` can be forwarded as a process-group signal that hits both
-# `go run` and the binary it execs. `go run` does not reliably propagate
-# signals to its child by itself.
-setsid bash -c "
-    exec go run ./cmd/edm-loadgen serve \
-        --listen '$LOADGEN_LISTEN' \
-        --mqtt-listen '$MQTT_LISTEN' \
-        --mqtt-keys-dir '$KEYS_DIR' \
-        --mqtt-node-name '$NODE_NAME' \
-        $(printf "%q " "$@")
-" &
-LOADGEN_PID=$!
 
 # Forward signals to the loadgen process group.
 forward() {
