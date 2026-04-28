@@ -8,7 +8,6 @@ package web
 
 import (
 	"html/template"
-	"strconv"
 
 	"github.com/linkdata/jaws"
 	"github.com/linkdata/jaws/lib/bind"
@@ -180,10 +179,11 @@ func (r PatternRow) SentCount() bind.HTMLGetter {
 	return AtomicInt64Getter(r.sent, r.group)
 }
 
-// QPSText shows the current QPS knob value next to the slider.
+// QPSText shows the current QPS knob value next to the slider, pretty-printed
+// with bytecount so big rates read as e.g. "1.23M" instead of "1230000".
 func (p *Page) QPSText() bind.HTMLGetter {
 	return bind.HTMLGetterFunc(func(*jaws.Element) template.HTML {
 		v := atomicLoad32(&p.st.QPS)
-		return template.HTML(strconv.FormatInt(int64(v), 10)) // #nosec G203
+		return template.HTML(formatCount(int64(v))) // #nosec G203
 	}, &p.st.QPS)
 }

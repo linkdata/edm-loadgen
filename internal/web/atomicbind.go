@@ -1,14 +1,27 @@
 package web
 
 import (
+	"fmt"
 	"html/template"
 	"strconv"
 	"sync"
 	"sync/atomic"
 
+	"github.com/linkdata/bytecount"
 	"github.com/linkdata/jaws"
 	"github.com/linkdata/jaws/lib/bind"
 )
+
+// formatCount is the canonical pretty-printer for counters and rates in the
+// UI. It uses github.com/linkdata/bytecount with `%#d` — base-1000 scaling
+// and no unit suffix ("1.23M" instead of "1.23MB"). Values below 1000 are
+// rendered as plain integers so small counters don't gain spurious decimals.
+func formatCount(n int64) string {
+	if n > -1000 && n < 1000 {
+		return strconv.FormatInt(n, 10)
+	}
+	return fmt.Sprintf("%#d", bytecount.N(n))
+}
 
 // AtomicInt32 returns a Binder[int32] backed by atomic.LoadInt32 /
 // atomic.StoreInt32 on p. The locker is taken for the binder's mutual
@@ -33,31 +46,27 @@ func AtomicInt32(mu sync.Locker, p *int32) bind.Binder[int32] {
 		})
 }
 
-// AtomicInt64Getter returns an HTMLGetter that renders the current value of p
-// using atomic.LoadInt64. Producer/verifier code updates p with
-// atomic.AddInt64 / StoreInt64 so reads see consistent values.
-//
-// Pass extra dependency tags via deps (e.g. a group tag like &state.Observed)
-// so a single Request.Dirty call can refresh many gauges.
+// AtomicInt64Getter renders the current value of p (via atomic.LoadInt64)
+// pretty-printed through bytecount. Pass extra dependency tags via deps so
+// a single Dirty call can refresh many gauges at once.
 func AtomicInt64Getter(p *int64, deps ...any) bind.HTMLGetter {
 	return bind.HTMLGetterFunc(func(*jaws.Element) template.HTML {
-		// Decimal integers are safe to embed without escaping.
-		return template.HTML(strconv.FormatInt(atomic.LoadInt64(p), 10)) // #nosec G203
+		// formatCount produces only digits, dots and ASCII scale letters
+		// (k/M/G/...), all safe to embed as raw HTML without escaping.
+		return template.HTML(formatCount(atomic.LoadInt64(p))) // #nosec G203
 	}, append([]any{p}, deps...)...)
 }
 
 // DriftGetter returns an HTMLGetter that displays sent-observed drift with a
-// leading sign so the UI distinguishes positive (load-gen ahead) and
-// negative (verifier ahead) values.
+// leading sign and bytecount-scaled magnitude.
 func DriftGetter(sent, observed *int64, deps ...any) bind.HTMLGetter {
 	return bind.HTMLGetterFunc(func(*jaws.Element) template.HTML {
-		s := atomic.LoadInt64(sent)
-		o := atomic.LoadInt64(observed)
-		d := s - o
+		d := atomic.LoadInt64(sent) - atomic.LoadInt64(observed)
 		sign := "+"
 		if d < 0 {
-			sign = ""
+			sign = "-"
+			d = -d
 		}
-		return template.HTML(sign + strconv.FormatInt(d, 10)) // #nosec G203
+		return template.HTML(sign + formatCount(d)) // #nosec G203
 	}, append([]any{sent, observed}, deps...)...)
 }

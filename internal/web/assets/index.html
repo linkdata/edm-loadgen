@@ -21,7 +21,14 @@
             <label class="form-label mb-1">
               QPS: <span class="badge text-bg-secondary">{{$.Span .QPSText}}</span>
             </label>
-            {{$.Range .QPS `class="form-range" min="1" max="20000" step="1"`}}
+            <div class="row g-2 align-items-center">
+              <div class="col">
+                {{$.Range .QPS `class="form-range" min="0" max="10000000" step="10000"`}}
+              </div>
+              <div class="col-auto">
+                {{$.Number .QPS `class="form-control form-control-sm" style="width:9rem" min="0" step="1"`}}
+              </div>
+            </div>
           </div>
         </div>
         <div class="row g-3 mt-2">
