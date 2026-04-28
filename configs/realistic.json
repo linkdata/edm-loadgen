@@ -1,0 +1,57 @@
+{
+  "qps": 500,
+  "report_interval": "5s",
+  "mix": {
+    "background": 80,
+    "wellknown":  0,
+    "dga":        5,
+    "beacon":     2,
+    "fastflux":   1,
+    "dyndns":     2,
+    "exfil":      5,
+    "exotic":     3,
+    "evasion":    2
+  },
+  "background": {
+    "zipf_alpha": 1.2,
+    "qtype_dist": {
+      "A": 54, "AAAA": 19, "HTTPS": 8, "MX": 1, "PTR": 4,
+      "TXT": 1, "NS": 1, "SRV": 1, "CNAME": 1, "SVCB": 10
+    }
+  },
+  "wellknown": { "fraction": 0.85 },
+  "dga": {
+    "family":     "mixed",
+    "length_min": 8,
+    "length_max": 24,
+    "tlds":       ["com", "net", "org", "xyz", "info"]
+  },
+  "beacon": {
+    "domain":     "c2.test.invalid",
+    "interval":   "60s",
+    "jitter_pct": 0.10
+  },
+  "fastflux": {
+    "domain":        "flux.test.invalid",
+    "ip_pool_cidr":  "203.0.113.0/24",
+    "ttl_secs":      120,
+    "churn_per_min": 6
+  },
+  "dyndns": {
+    "providers":       ["no-ip.com", "duckdns.org", "freedns.afraid.org"],
+    "update_interval": "30m"
+  },
+  "exfil": {
+    "tool":             "dnscat2",
+    "domain":           "ex.test.invalid",
+    "payload_bytes":    524288,
+    "burst_qps":        200,
+    "session_interval": "10m"
+  },
+  "exotic": {
+    "record_types":      ["TXT", "CNAME", "NULL"],
+    "payload_bytes_min": 32,
+    "payload_bytes_max": 480
+  },
+  "evasion": { "profile": "medium" }
+}

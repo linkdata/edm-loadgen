@@ -1,0 +1,5 @@
+/* Minimal overrides on top of jawsboot's Bootstrap. */
+body { background: #f8f9fa; }
+.display-6 { font-variant-numeric: tabular-nums; }
+.h4 { font-variant-numeric: tabular-nums; }
+table.table-sm td, table.table-sm th { font-variant-numeric: tabular-nums; }

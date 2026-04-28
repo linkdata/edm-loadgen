@@ -1,0 +1,15 @@
+{
+  "qps": 200,
+  "report_interval": "5s",
+  "mix": {
+    "background": 100,
+    "wellknown":  0,
+    "dga":        0,
+    "beacon":     0,
+    "fastflux":   0,
+    "dyndns":     0,
+    "exfil":      0,
+    "exotic":     0,
+    "evasion":    0
+  }
+}

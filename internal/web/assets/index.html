@@ -1,0 +1,134 @@
+{{with .Dot}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>edm-loadgen</title>
+  {{$.HeadHTML}}
+</head>
+<body>
+  <main class="container py-3">
+    <h1 class="h3 mb-3">edm-loadgen control panel</h1>
+
+    <section class="card mb-3">
+      <div class="card-body">
+        <div class="row g-3 align-items-center">
+          <div class="col-auto">
+            {{$.Button .RunButton `class="btn btn-primary"`}}
+          </div>
+          <div class="col">
+            <label class="form-label mb-1">
+              QPS: <span class="badge text-bg-secondary">{{$.Span .QPSText}}</span>
+            </label>
+            {{$.Range .QPS `class="form-range" min="1" max="20000" step="1"`}}
+          </div>
+        </div>
+        <div class="row g-3 mt-2">
+          <div class="col-md-6">
+            <label class="form-label">EDM target</label>
+            {{$.Text .Target `class="form-control" placeholder="tcp://127.0.0.1:53535"`}}
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Metrics URL</label>
+            {{$.Text .MetricsURL `class="form-control" placeholder="http://127.0.0.1:2112/metrics"`}}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card mb-3">
+      <div class="card-body">
+        <h2 class="h5">Live counters</h2>
+        <div class="row g-3 text-center">
+          <div class="col-6 col-md-3">
+            <div class="text-muted small">Sent</div>
+            <div class="display-6">{{$.Span .SentTotal}}</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="text-muted small">EDM processed</div>
+            <div class="display-6">{{$.Span .EDMProcessed}}</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="text-muted small">Drift</div>
+            <div class="display-6">{{$.Span .Drift}}</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="text-muted small">EDM ignored</div>
+            <div class="display-6">{{$.Span .EDMIgnored}}</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="text-muted small">EDM new qname</div>
+            <div class="h4">{{$.Span .EDMNewQname}}</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="text-muted small">Cryptopan hits</div>
+            <div class="h4">{{$.Span .EDMCryptopanHits}}</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card mb-3">
+      <div class="card-body">
+        <h2 class="h5">Mix weights</h2>
+        <p class="text-muted small">Relative weights — they are normalised, only ratios matter.</p>
+        <div class="row g-3">
+          <div class="col-12 col-md-6 col-lg-4">
+            <label class="form-label mb-1">background</label>
+            {{$.Range .MixBackground `class="form-range" min="0" max="100" step="1"`}}
+          </div>
+          <div class="col-12 col-md-6 col-lg-4">
+            <label class="form-label mb-1">wellknown</label>
+            {{$.Range .MixWellKnown `class="form-range" min="0" max="100" step="1"`}}
+          </div>
+          <div class="col-12 col-md-6 col-lg-4">
+            <label class="form-label mb-1">dga</label>
+            {{$.Range .MixDGA `class="form-range" min="0" max="100" step="1"`}}
+          </div>
+          <div class="col-12 col-md-6 col-lg-4">
+            <label class="form-label mb-1">beacon</label>
+            {{$.Range .MixBeacon `class="form-range" min="0" max="100" step="1"`}}
+          </div>
+          <div class="col-12 col-md-6 col-lg-4">
+            <label class="form-label mb-1">fastflux</label>
+            {{$.Range .MixFastFlux `class="form-range" min="0" max="100" step="1"`}}
+          </div>
+          <div class="col-12 col-md-6 col-lg-4">
+            <label class="form-label mb-1">dyndns</label>
+            {{$.Range .MixDynDNS `class="form-range" min="0" max="100" step="1"`}}
+          </div>
+          <div class="col-12 col-md-6 col-lg-4">
+            <label class="form-label mb-1">exfil</label>
+            {{$.Range .MixExfil `class="form-range" min="0" max="100" step="1"`}}
+          </div>
+          <div class="col-12 col-md-6 col-lg-4">
+            <label class="form-label mb-1">exotic</label>
+            {{$.Range .MixExotic `class="form-range" min="0" max="100" step="1"`}}
+          </div>
+          <div class="col-12 col-md-6 col-lg-4">
+            <label class="form-label mb-1">evasion</label>
+            {{$.Range .MixEvasion `class="form-range" min="0" max="100" step="1"`}}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card mb-3">
+      <div class="card-body">
+        <h2 class="h5">Per-pattern sent counts</h2>
+        <table class="table table-sm">
+          <thead><tr><th>Pattern</th><th class="text-end">Sent</th></tr></thead>
+          <tbody>
+            {{range .Patterns}}
+            <tr><td>{{.Name}}</td><td class="text-end">{{$.Span .SentCount}}</td></tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  {{$.TailHTML}}
+</body>
+</html>
+{{end}}

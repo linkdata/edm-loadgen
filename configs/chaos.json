@@ -1,0 +1,46 @@
+{
+  "qps": 2000,
+  "report_interval": "3s",
+  "mix": {
+    "background": 30,
+    "wellknown":  20,
+    "dga":        15,
+    "beacon":     5,
+    "fastflux":   10,
+    "dyndns":     5,
+    "exfil":      20,
+    "exotic":     10,
+    "evasion":    15
+  },
+  "wellknown": { "fraction": 0.5 },
+  "dga": {
+    "family":     "mixed",
+    "length_min": 6,
+    "length_max": 32,
+    "tlds":       ["com", "net", "org", "xyz", "info", "top", "club"]
+  },
+  "beacon": {
+    "domain":     "c2.test.invalid",
+    "interval":   "5s",
+    "jitter_pct": 0.30
+  },
+  "fastflux": {
+    "domain":        "flux.test.invalid",
+    "ip_pool_cidr":  "203.0.113.0/22",
+    "ttl_secs":      30,
+    "churn_per_min": 60
+  },
+  "exfil": {
+    "tool":             "dnscat2",
+    "domain":           "ex.test.invalid",
+    "payload_bytes":    1048576,
+    "burst_qps":        500,
+    "session_interval": "30s"
+  },
+  "exotic": {
+    "record_types":      ["TXT", "CNAME", "NULL"],
+    "payload_bytes_min": 200,
+    "payload_bytes_max": 800
+  },
+  "evasion": { "profile": "heavy" }
+}
