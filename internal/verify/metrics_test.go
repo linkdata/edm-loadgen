@@ -51,18 +51,57 @@ func TestScraperParsesEDMMetrics(t *testing.T) {
 	}
 }
 
-func TestApplySnapshot(t *testing.T) {
+// TestScraperBaseline confirms that the first scrape establishes a baseline
+// and subsequent scrapes report values relative to it. EDM having processed
+// frames before the load-gen attached must not show up as phantom drift.
+func TestScraperBaseline(t *testing.T) {
 	st := state.New()
-	applySnapshot(st, Snapshot{
-		Processed:    100,
-		NewQname:     20,
-		IgnoredTotal: 5,
-	})
+	sc := NewScraper("http://unused")
+
+	// First scrape: EDM had been running and accumulated counters.
+	sc.apply(st, Snapshot{Processed: 1_000_000, NewQname: 200, CryptopanHits: 5_000})
 	r := Reconcile(st)
-	if r.EDMProcessed != 100 {
-		t.Errorf("EDMProcessed = %d", r.EDMProcessed)
+	if r.EDMProcessed != 0 {
+		t.Errorf("after baseline EDMProcessed = %d, want 0", r.EDMProcessed)
 	}
-	if r.Drift != -100 {
-		t.Errorf("Drift = %d, want -100 (sent=0)", r.Drift)
+	if r.EDMNewQname != 0 {
+		t.Errorf("after baseline EDMNewQname = %d, want 0", r.EDMNewQname)
+	}
+	if r.Drift != 0 {
+		t.Errorf("after baseline Drift = %d, want 0", r.Drift)
+	}
+
+	// Second scrape: EDM processed 350 more frames and saw 12 new qnames.
+	sc.apply(st, Snapshot{Processed: 1_000_350, NewQname: 212, CryptopanHits: 5_700})
+	r = Reconcile(st)
+	if r.EDMProcessed != 350 {
+		t.Errorf("delta EDMProcessed = %d, want 350", r.EDMProcessed)
+	}
+	if r.EDMNewQname != 12 {
+		t.Errorf("delta EDMNewQname = %d, want 12", r.EDMNewQname)
+	}
+}
+
+// TestScraperRebaselinesOnRestart confirms that an apparent counter
+// regression (which only happens when EDM is restarted and counters reset
+// to zero) re-anchors the baseline so post-restart progress is still
+// visible.
+func TestScraperRebaselinesOnRestart(t *testing.T) {
+	st := state.New()
+	sc := NewScraper("http://unused")
+
+	sc.apply(st, Snapshot{Processed: 1000, NewQname: 50}) // baseline
+	sc.apply(st, Snapshot{Processed: 1500, NewQname: 70}) // +500 / +20
+	r := Reconcile(st)
+	if r.EDMProcessed != 500 {
+		t.Fatalf("pre-restart EDMProcessed = %d, want 500", r.EDMProcessed)
+	}
+
+	// EDM restarts: counters reset to 0 then accumulate 42 frames.
+	sc.apply(st, Snapshot{Processed: 0})  // restart detected, rebaseline
+	sc.apply(st, Snapshot{Processed: 42}) // 42 - 0
+	r = Reconcile(st)
+	if r.EDMProcessed != 42 {
+		t.Errorf("post-restart EDMProcessed = %d, want 42", r.EDMProcessed)
 	}
 }

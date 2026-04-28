@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,9 +30,21 @@ type Snapshot struct {
 }
 
 // Scraper polls a URL and writes parsed snapshots into a State.
+//
+// The scraper keeps a private baseline snapshot taken on its first successful
+// scrape. All values written into State.Observed are reported relative to that
+// baseline, so EDM having processed N frames before the load-gen attached
+// shows up as 0 (not N) on first paint and drift starts honest.
+//
+// EDM restarts are detected as any counter going backwards; the baseline
+// resets to the new snapshot so we count from the new EDM lifetime forward.
 type Scraper struct {
 	url    string
 	client *http.Client
+
+	mu          sync.Mutex
+	baselineSet bool
+	baseline    Snapshot
 }
 
 // NewScraper returns a Scraper that GETs url with a sane timeout.
@@ -116,7 +129,7 @@ func (s *Scraper) Run(ctx context.Context, st *state.State, interval time.Durati
 
 	// Do an initial scrape immediately so the UI has data on first paint.
 	if snap, err := s.Once(ctx); err == nil {
-		applySnapshot(st, snap)
+		s.apply(st, snap)
 	}
 
 	for {
@@ -128,16 +141,61 @@ func (s *Scraper) Run(ctx context.Context, st *state.State, interval time.Durati
 			if err != nil {
 				continue // transient errors are tolerated
 			}
-			applySnapshot(st, snap)
+			s.apply(st, snap)
 		}
 	}
 }
 
-func applySnapshot(st *state.State, snap Snapshot) {
-	atomic.StoreInt64(&st.Observed.EDMProcessed, snap.Processed)
-	atomic.StoreInt64(&st.Observed.EDMNewQname, snap.NewQname)
-	atomic.StoreInt64(&st.Observed.EDMIgnoredTotal, snap.IgnoredTotal)
-	atomic.StoreInt64(&st.Observed.EDMCryptopanHits, snap.CryptopanHits)
-	atomic.StoreInt64(&st.Observed.EDMCryptopanEvict, snap.CryptopanEvict)
-	atomic.StoreInt64(&st.Observed.EDMSeenQnameEvict, snap.SeenQnameEvict)
+// apply rebases snap against the scraper's baseline (capturing the baseline
+// on the first call, or resetting it if any counter has gone backwards) and
+// writes the relative values into st.Observed.
+func (s *Scraper) apply(st *state.State, snap Snapshot) {
+	s.mu.Lock()
+	if !s.baselineSet || snapshotWentBackwards(snap, s.baseline) {
+		s.baseline = snap
+		s.baselineSet = true
+	}
+	rel := snap.relativeTo(s.baseline)
+	s.mu.Unlock()
+
+	atomic.StoreInt64(&st.Observed.EDMProcessed, rel.Processed)
+	atomic.StoreInt64(&st.Observed.EDMNewQname, rel.NewQname)
+	atomic.StoreInt64(&st.Observed.EDMIgnoredTotal, rel.IgnoredTotal)
+	atomic.StoreInt64(&st.Observed.EDMCryptopanHits, rel.CryptopanHits)
+	atomic.StoreInt64(&st.Observed.EDMCryptopanEvict, rel.CryptopanEvict)
+	atomic.StoreInt64(&st.Observed.EDMSeenQnameEvict, rel.SeenQnameEvict)
+}
+
+// relativeTo returns a snapshot representing snap's counter values relative
+// to base (i.e. each field is snap.X - base.X). Negative results are clamped
+// to zero, which only happens momentarily during EDM restarts before the
+// caller resets the baseline.
+func (snap Snapshot) relativeTo(base Snapshot) Snapshot {
+	clamp := func(a, b int64) int64 {
+		if a <= b {
+			return 0
+		}
+		return a - b
+	}
+	return Snapshot{
+		At:             snap.At,
+		Processed:      clamp(snap.Processed, base.Processed),
+		NewQname:       clamp(snap.NewQname, base.NewQname),
+		IgnoredTotal:   clamp(snap.IgnoredTotal, base.IgnoredTotal),
+		CryptopanHits:  clamp(snap.CryptopanHits, base.CryptopanHits),
+		CryptopanEvict: clamp(snap.CryptopanEvict, base.CryptopanEvict),
+		SeenQnameEvict: clamp(snap.SeenQnameEvict, base.SeenQnameEvict),
+	}
+}
+
+// snapshotWentBackwards reports whether any counter in snap is strictly less
+// than its baseline counterpart, which is the signal that EDM was restarted
+// and counters reset to zero.
+func snapshotWentBackwards(snap, base Snapshot) bool {
+	return snap.Processed < base.Processed ||
+		snap.NewQname < base.NewQname ||
+		snap.IgnoredTotal < base.IgnoredTotal ||
+		snap.CryptopanHits < base.CryptopanHits ||
+		snap.CryptopanEvict < base.CryptopanEvict ||
+		snap.SeenQnameEvict < base.SeenQnameEvict
 }

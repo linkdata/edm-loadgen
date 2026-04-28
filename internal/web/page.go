@@ -122,34 +122,43 @@ func (p *Page) Drift() bind.HTMLGetter {
 	return DriftGetter(&p.st.Sent.Total, &p.st.Observed.EDMProcessed, &p.st.Observed, &p.st.Sent)
 }
 
-// PerPattern returns a slice describing each pattern's sent count. The
-// template renders this as a table; each row's identity tag is its
-// SentField pointer so a single Request.Dirty(&state.Sent) refreshes them
-// all together.
+// PatternRow describes one row in the per-pattern sent-counts table.
+//
+// The row carries both the per-pattern int64 pointer (sent) and a "group" tag
+// (group). Both are registered as dependency tags on the row's HTMLGetter so
+// the broadcast loop's Jaws.Dirty(&state.Sent) call — a single shared tag —
+// fans out to every row's Span without enumerating per-row pointers.
+//
+// Per JaWS skill rules, all tags are stable comparable pointers into
+// state.State.
 type PatternRow struct {
-	Name string
-	Sent *int64
+	Name  string
+	sent  *int64
+	group any
 }
 
-// Patterns lists patterns in display order.
+// Patterns lists patterns in display order. Each row gets &p.st.Sent as a
+// shared group tag so refreshes can target the whole table at once.
 func (p *Page) Patterns() []PatternRow {
+	g := any(&p.st.Sent)
 	return []PatternRow{
-		{"background", &p.st.Sent.Background},
-		{"wellknown", &p.st.Sent.WellKnown},
-		{"dga", &p.st.Sent.DGA},
-		{"beacon", &p.st.Sent.Beacon},
-		{"fastflux", &p.st.Sent.FastFlux},
-		{"dyndns", &p.st.Sent.DynDNS},
-		{"exfil", &p.st.Sent.Exfil},
-		{"exotic", &p.st.Sent.Exotic},
-		{"evasion", &p.st.Sent.Evasion},
+		{"background", &p.st.Sent.Background, g},
+		{"wellknown", &p.st.Sent.WellKnown, g},
+		{"dga", &p.st.Sent.DGA, g},
+		{"beacon", &p.st.Sent.Beacon, g},
+		{"fastflux", &p.st.Sent.FastFlux, g},
+		{"dyndns", &p.st.Sent.DynDNS, g},
+		{"exfil", &p.st.Sent.Exfil, g},
+		{"exotic", &p.st.Sent.Exotic, g},
+		{"evasion", &p.st.Sent.Evasion, g},
 	}
 }
 
-// SentCount renders an individual PatternRow's count for use inside the
-// Patterns range.
+// SentCount renders this row's count. It depends on both the row's per-pattern
+// pointer (so per-row Dirty still works if a caller wants finer targeting) and
+// the shared group tag (so a single Dirty(&state.Sent) refreshes all rows).
 func (r PatternRow) SentCount() bind.HTMLGetter {
-	return AtomicInt64Getter(r.Sent)
+	return AtomicInt64Getter(r.sent, r.group)
 }
 
 // QPSText shows the current QPS knob value next to the slider.
