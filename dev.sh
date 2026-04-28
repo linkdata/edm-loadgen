@@ -125,6 +125,7 @@ setsid bash -c "
         --data-dir '$EDM_DATA' \
         --config-file '$EDM_CONFIG/edm.toml' \
         --well-known-domains-file '$EDM_CONFIG/well-known-domains.dawg' \
+        --minimiser-workers 8 \
         --disable-histogram-sender \
         --mqtt-server 'tls://$MQTT_ENDPOINT' \
         --mqtt-keepalive 30 \
