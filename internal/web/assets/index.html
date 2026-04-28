@@ -19,7 +19,10 @@
           </div>
           <div class="col">
             <label class="form-label mb-1">
-              QPS: <span class="badge text-bg-secondary">{{$.Span .QPSText}}</span>
+              QPS:
+              <span class="badge text-bg-secondary">{{$.Span .QPSText}}</span>
+              <span class="text-muted small ms-2">actual:</span>
+              <span class="badge text-bg-info">{{$.Span .ObservedQPSText}}</span>
             </label>
             <div class="row g-2 align-items-center">
               <div class="col">

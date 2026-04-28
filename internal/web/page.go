@@ -179,11 +179,22 @@ func (r PatternRow) SentCount() bind.HTMLGetter {
 	return AtomicInt64Getter(r.sent, r.group)
 }
 
-// QPSText shows the current QPS knob value next to the slider, pretty-printed
-// with bytecount so big rates read as e.g. "1.23M" instead of "1230000".
+// QPSText shows the current QPS knob value (target) next to the slider,
+// pretty-printed with bytecount so big rates read as e.g. "1.23M" instead
+// of "1230000".
 func (p *Page) QPSText() bind.HTMLGetter {
 	return bind.HTMLGetterFunc(func(*jaws.Element) template.HTML {
 		v := atomicLoad32(&p.st.QPS)
 		return template.HTML(formatCount(int64(v))) // #nosec G203
 	}, &p.st.QPS)
+}
+
+// ObservedQPSText shows the rate the producer's ticker is actually
+// achieving (sampled twice per second). Lags the target by ~1s after a
+// knob change as the linkdata/rate ticker re-measures.
+func (p *Page) ObservedQPSText() bind.HTMLGetter {
+	return bind.HTMLGetterFunc(func(*jaws.Element) template.HTML {
+		v := atomicLoad32(&p.st.ObservedQPS)
+		return template.HTML(formatCount(int64(v))) // #nosec G203
+	}, &p.st.ObservedQPS)
 }

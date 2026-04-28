@@ -49,6 +49,7 @@ func (p *Producer) Run(ctx context.Context) error {
 	beaconCtx, cancelBeacon := context.WithCancel(ctx)
 	defer cancelBeacon()
 	go p.runBeacon(beaconCtx)
+	go p.publishRate(beaconCtx)
 
 	for p.bucket.Wait() {
 		if ctx.Err() != nil {
@@ -100,6 +101,24 @@ func (p *Producer) runBeacon(ctx context.Context) {
 			continue
 		}
 		_ = p.send("beacon", q)
+	}
+}
+
+// publishRate samples the bucket's observed rate every 500ms and writes it
+// to st.ObservedQPS. The bucket itself only re-measures internally roughly
+// once per second, so a faster sampling interval is fine and the UI can
+// dirty its gauge at the broadcast cadence.
+func (p *Producer) publishRate(ctx context.Context) {
+	t := time.NewTicker(500 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			atomic.StoreInt32(&p.st.ObservedQPS, 0)
+			return
+		case <-t.C:
+			atomic.StoreInt32(&p.st.ObservedQPS, p.bucket.Rate())
+		}
 	}
 }
 

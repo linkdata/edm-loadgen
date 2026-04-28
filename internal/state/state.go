@@ -23,8 +23,14 @@ type State struct {
 	MetricsURL string
 
 	// Atomic knobs — accessed via sync/atomic, no mutex needed.
-	QPS     int32 // total queries per second
+	QPS     int32 // total queries per second (target)
 	Running int32 // 0 or 1
+
+	// ObservedQPS is the rate the producer's ticker is actually achieving,
+	// sampled by the producer goroutine and read live by the UI. Updated
+	// asynchronously; lags the target QPS knob by ~one second after a knob
+	// change as the linkdata/rate ticker re-measures.
+	ObservedQPS int32
 
 	// Mutex-guarded knobs.
 	Mix        Mix
