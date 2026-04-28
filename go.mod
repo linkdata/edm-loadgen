@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	github.com/dnstap/golang-dnstap v0.4.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
+	github.com/linkdata/bytecount v1.4.0
 	github.com/linkdata/jaws v0.403.0
 	github.com/linkdata/rate v1.17.0
 	github.com/miekg/dns v1.1.72
