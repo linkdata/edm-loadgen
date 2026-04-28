@@ -1,0 +1,11 @@
+# Build artefacts
+/edm-loadgen
+*.test
+*.out
+
+# Local Go test cache (CLAUDE.md style; only present if you opt in)
+.gocache/
+
+# Editor scratch
+*.swp
+.DS_Store
