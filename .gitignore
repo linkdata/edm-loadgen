@@ -3,6 +3,9 @@
 *.test
 *.out
 
+# Generated TLS material from `--mqtt-listen` (regenerated on demand).
+/keys/
+
 # Local Go test cache (CLAUDE.md style; only present if you opt in)
 .gocache/
 

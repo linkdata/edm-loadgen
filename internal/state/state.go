@@ -38,12 +38,34 @@ type State struct {
 	Exotic     ExoticKnobs
 	Evasion    EvasionKnobs
 
-	// Live counters. Sent is written by the producer; Observed by the verifier.
+	// Live counters. Sent is written by the producer; Observed by the
+	// verifier; Received by the embedded MQTT broker.
 	Sent     Counters
 	Observed Counters
+	Received ReceivedCounters
+
+	// MQTT holds the embedded-broker config. Empty Listen disables it.
+	MQTT MQTTKnobs
 
 	// Verifier scrape cadence.
 	ReportInterval time.Duration
+}
+
+// MQTTKnobs configures the embedded MQTT broker. Listen="" disables it.
+type MQTTKnobs struct {
+	Listen   string // e.g. ":8883" or "127.0.0.1:8883"
+	KeysDir  string // dir where pki.Ensure reads/writes cert material
+	NodeName string // EDM node id; topic prefix and client-id stem
+}
+
+// ReceivedCounters tracks messages the embedded broker has received.
+// All fields are int64 accessed via sync/atomic so the broker's OnPublish
+// hook can write them directly via pointers and UI getters can read them
+// without a mutex.
+type ReceivedCounters struct {
+	Total       int64
+	EDMTopic    int64
+	Connections int64
 }
 
 // Mix holds the relative weights for each pattern. Stored as plain int32 so

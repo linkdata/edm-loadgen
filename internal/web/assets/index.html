@@ -65,6 +65,18 @@
             <div class="text-muted small">Cryptopan hits</div>
             <div class="h4">{{$.Span .EDMCryptopanHits}}</div>
           </div>
+          <div class="col-6 col-md-3">
+            <div class="text-muted small">MQTT received</div>
+            <div class="h4">{{$.Span .MQTTReceived}}</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="text-muted small">MQTT (EDM topic)</div>
+            <div class="h4">{{$.Span .MQTTReceivedEDM}}</div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="text-muted small">MQTT clients</div>
+            <div class="h4">{{$.Span .MQTTConnections}}</div>
+          </div>
         </div>
       </div>
     </section>

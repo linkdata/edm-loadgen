@@ -122,6 +122,25 @@ func (p *Page) Drift() bind.HTMLGetter {
 	return DriftGetter(&p.st.Sent.Total, &p.st.Observed.EDMProcessed, &p.st.Observed, &p.st.Sent)
 }
 
+// ----- MQTT receiver counters --------------------------------------------
+
+// MQTTReceived shows the total number of MQTT publishes received from EDM.
+// Stays at 0 unless --mqtt-listen is set on the load-gen.
+func (p *Page) MQTTReceived() bind.HTMLGetter {
+	return AtomicInt64Getter(&p.st.Received.Total, &p.st.Received)
+}
+
+// MQTTReceivedEDM shows the subset of received messages whose topic matches
+// EDM's expected events/up/<NodeName>/ prefix.
+func (p *Page) MQTTReceivedEDM() bind.HTMLGetter {
+	return AtomicInt64Getter(&p.st.Received.EDMTopic, &p.st.Received)
+}
+
+// MQTTConnections shows how many MQTT clients have connected.
+func (p *Page) MQTTConnections() bind.HTMLGetter {
+	return AtomicInt64Getter(&p.st.Received.Connections, &p.st.Received)
+}
+
 // PatternRow describes one row in the per-pattern sent-counts table.
 //
 // The row carries both the per-pattern int64 pointer (sent) and a "group" tag

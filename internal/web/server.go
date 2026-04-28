@@ -130,7 +130,7 @@ func (s *Server) broadcastLoop(ctx context.Context) {
 			return
 		case <-t.C:
 			// Group tags: refresh everything that depends on live counters.
-			s.jw.Dirty(&s.st.Sent, &s.st.Observed)
+			s.jw.Dirty(&s.st.Sent, &s.st.Observed, &s.st.Received)
 		}
 	}
 }

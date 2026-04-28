@@ -115,6 +115,56 @@ in [`tools/fetch-tranco.sh`](tools/fetch-tranco.sh).
 > `pkg/runner/runner.go` and replace `"127.0.0.1:2112"` and
 > `"127.0.0.1:6060"` with `"0.0.0.0:..."` before `go build`.
 
+### Optional: enable MQTT publishing
+
+The recipe above runs EDM with `--disable-mqtt`. That keeps the data path
+working but suppresses one counter — `edm_new_qname_queued_total` — because
+EDM increments it inside the MQTT-publish branch
+([`pkg/runner/runner.go:2014`](https://github.com/dnstapir/edm/blob/main/pkg/runner/runner.go)).
+To exercise the full publish path, the load-gen embeds a minimal MQTT broker
+(`internal/mqtt`) that EDM can connect to. The broker accepts any client cert
+on a self-signed TLS listener and counts received Publishes per topic.
+
+Start the load-gen with `--mqtt-listen` and it will:
+
+1. Generate (or reuse) a CA + server cert + client cert + JWS key under
+   `--mqtt-keys-dir` (default `./keys/`).
+2. Open the broker on the configured TLS port.
+3. Print the exact EDM flags to feed it.
+
+```bash
+./edm-loadgen serve --listen :8090 --mqtt-listen :8883
+# edm-loadgen MQTT broker listening on tls://:8883
+# Run EDM with these MQTT flags (drop --disable-mqtt):
+#   --mqtt-server=tls://127.0.0.1:8883
+#   --mqtt-topic=events/up/edm-loadgen-1/edm
+#   ...
+```
+
+Then restart EDM with those flags (drop `--disable-mqtt`):
+
+```bash
+/tmp/dnstapir-edm-bin run \
+    --input-tcp 127.0.0.1:53535 \
+    --data-dir /tmp/edm-data \
+    --config-file /tmp/edm-config/edm.toml \
+    --well-known-domains-file /tmp/edm-config/well-known-domains.dawg \
+    --disable-histogram-sender \
+    --mqtt-server=tls://127.0.0.1:8883 \
+    --mqtt-topic=events/up/edm-loadgen-1/edm \
+    --mqtt-client-id=edm-loadgen-1-edm-pub \
+    --mqtt-signing-key-id=edm-loadgen-1 \
+    --mqtt-ca-file=./keys/ca.crt \
+    --mqtt-client-cert-file=./keys/client.crt \
+    --mqtt-client-key-file=./keys/client.key \
+    --mqtt-signing-key-file=./keys/jws.key
+```
+
+In the UI, **EDM new qname**, **MQTT received**, and **MQTT (EDM topic)**
+gauges should all start ticking on novel traffic. The broker is dev-only —
+no JWS-signature validation, no ACLs, accepts whatever client cert EDM
+presents — and only ever bound to localhost by default.
+
 ## Quick start
 
 Assuming a running native EDM at `127.0.0.1:53535` (with `/metrics` on

@@ -27,6 +27,8 @@ import (
 	"github.com/linkdata/edm-loadgen/internal/dns"
 	"github.com/linkdata/edm-loadgen/internal/dnstap"
 	"github.com/linkdata/edm-loadgen/internal/mix"
+	"github.com/linkdata/edm-loadgen/internal/mqtt"
+	"github.com/linkdata/edm-loadgen/internal/pki"
 	"github.com/linkdata/edm-loadgen/internal/producer"
 	"github.com/linkdata/edm-loadgen/internal/sink"
 	"github.com/linkdata/edm-loadgen/internal/state"
@@ -141,6 +143,9 @@ func runHeadless(argv []string) {
 	mixExfil := fs.Int("mix.exfil", 5, "")
 	mixExotic := fs.Int("mix.exotic", 3, "")
 	mixEva := fs.Int("mix.evasion", 2, "")
+	mqttListen := fs.String("mqtt-listen", "", `enable embedded MQTT broker on this address (e.g. ":8883"); empty = off`)
+	mqttKeysDir := fs.String("mqtt-keys-dir", "./keys", "directory for the MQTT broker's TLS material (auto-generated on first use)")
+	mqttNodeName := fs.String("mqtt-node-name", "edm-loadgen-1", "EDM node name; topic prefix and client-id stem")
 	if err := fs.Parse(argv); err != nil {
 		os.Exit(2)
 	}
@@ -174,6 +179,15 @@ func runHeadless(argv []string) {
 	}
 	overlayMix(st, fs, set, *configPath == "",
 		mixBg, mixWk, mixDga, mixBeacon, mixFf, mixDd, mixExfil, mixExotic, mixEva)
+	if set["mqtt-listen"] || *configPath == "" {
+		st.MQTT.Listen = *mqttListen
+	}
+	if set["mqtt-keys-dir"] || *configPath == "" {
+		st.MQTT.KeysDir = *mqttKeysDir
+	}
+	if set["mqtt-node-name"] || *configPath == "" {
+		st.MQTT.NodeName = *mqttNodeName
+	}
 	st.SetRunning(true)
 
 	mixer, beacon, err := mix.FromState(st, *domains)
@@ -201,6 +215,10 @@ func runHeadless(argv []string) {
 		<-sigCh
 		cancel()
 	}()
+
+	if err := startMQTT(rootCtx, st); err != nil {
+		die("mqtt: %v", err)
+	}
 
 	prod := producer.New(st, mixer, beacon, snk)
 	go func() { _ = prod.Run(rootCtx) }()
@@ -296,6 +314,9 @@ func runServe(argv []string) {
 	reportInterval := fs.Duration("report-interval", 2*time.Second, "verifier scrape cadence")
 	uiTick := fs.Duration("ui-tick", 500*time.Millisecond, "UI broadcast cadence (live counters)")
 	startStopped := fs.Bool("start-stopped", false, "do not begin generating until the UI Run button is pressed")
+	mqttListen := fs.String("mqtt-listen", "", `enable embedded MQTT broker on this address (e.g. ":8883"); empty = off`)
+	mqttKeysDir := fs.String("mqtt-keys-dir", "./keys", "directory for the MQTT broker's TLS material (auto-generated on first use)")
+	mqttNodeName := fs.String("mqtt-node-name", "edm-loadgen-1", "EDM node name; topic prefix and client-id stem")
 	if err := fs.Parse(argv); err != nil {
 		os.Exit(2)
 	}
@@ -325,6 +346,15 @@ func runServe(argv []string) {
 	if set["qps"] || *configPath == "" {
 		atomic.StoreInt32(&st.QPS, int32(*qps))
 	}
+	if set["mqtt-listen"] || *configPath == "" {
+		st.MQTT.Listen = *mqttListen
+	}
+	if set["mqtt-keys-dir"] || *configPath == "" {
+		st.MQTT.KeysDir = *mqttKeysDir
+	}
+	if set["mqtt-node-name"] || *configPath == "" {
+		st.MQTT.NodeName = *mqttNodeName
+	}
 	st.SetRunning(!*startStopped)
 
 	mixer, beacon, err := mix.FromState(st, *domains)
@@ -352,6 +382,10 @@ func runServe(argv []string) {
 		die("web: %v", err)
 	}
 
+	if err := startMQTT(rootCtx, st); err != nil {
+		die("mqtt: %v", err)
+	}
+
 	prod := producer.New(st, mixer, beacon, snk)
 	go func() { _ = prod.Run(rootCtx) }()
 
@@ -362,6 +396,74 @@ func runServe(argv []string) {
 	if err := srv.Run(rootCtx); err != nil && err != context.Canceled {
 		die("serve: %v", err)
 	}
+}
+
+// startMQTT starts the embedded broker if st.MQTT.Listen is set. It ensures
+// the keys directory has the cert material, opens the listener, and prints
+// the EDM-side flags the user must pass to wire EDM into our broker.
+//
+// The broker runs on its own goroutine until ctx is cancelled. Returns nil
+// when MQTT is disabled.
+func startMQTT(ctx context.Context, st *state.State) error {
+	if st.MQTT.Listen == "" {
+		return nil
+	}
+	bundle, err := pki.Ensure(st.MQTT.KeysDir, []string{"127.0.0.1", "localhost"}, st.MQTT.NodeName)
+	if err != nil {
+		return fmt.Errorf("pki: %w", err)
+	}
+	// EDM derives its publish topic from the JWK kid:
+	//     events/up/<kid>/new_qname
+	// We set the kid to NodeName via pki.Ensure, so the broker matches the
+	// same prefix here.
+	prefix := "events/up/" + st.MQTT.NodeName + "/"
+	br, err := mqtt.New(mqtt.Options{
+		Listen:         st.MQTT.Listen,
+		CertFile:       bundle.ServerCert,
+		KeyFile:        bundle.ServerKey,
+		EDMTopicPrefix: prefix,
+		Total:          &st.Received.Total,
+		EDMTopic:       &st.Received.EDMTopic,
+		Connections:    &st.Received.Connections,
+	})
+	if err != nil {
+		return err
+	}
+	go func() { _ = br.Run(ctx) }()
+
+	// EDM (current main as of 2026-04) does not accept --mqtt-topic /
+	// --mqtt-client-id / --mqtt-signing-key-id as CLI flags — it derives
+	// both the topic and client id from the JWK kid. We just need to feed
+	// it server / ca / client-cert / client-key / signing-key paths.
+	fmt.Fprintf(os.Stderr,
+		`edm-loadgen MQTT broker listening on tls://%s (will receive at events/up/%s/new_qname)
+Run EDM with these MQTT flags (drop --disable-mqtt):
+  --mqtt-server=tls://%s
+  --mqtt-keepalive=30
+  --mqtt-ca-file=%s
+  --mqtt-client-cert-file=%s
+  --mqtt-client-key-file=%s
+  --mqtt-signing-key-file=%s
+`,
+		st.MQTT.Listen,
+		st.MQTT.NodeName,
+		mqttHost(st.MQTT.Listen),
+		bundle.CACert,
+		bundle.ClientCert,
+		bundle.ClientKey,
+		bundle.JWSKey,
+	)
+	return nil
+}
+
+// mqttHost rewrites a bind-all address (":8883") into a connectable form
+// ("127.0.0.1:8883") so the EDM-side flag pasted from the printout works
+// without further editing.
+func mqttHost(listen string) string {
+	if len(listen) > 0 && listen[0] == ':' {
+		return "127.0.0.1" + listen
+	}
+	return listen
 }
 
 func die(format string, args ...any) {
