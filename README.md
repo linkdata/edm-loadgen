@@ -30,6 +30,91 @@ versions EDM uses (`github.com/dnstap/golang-dnstap@v0.4.0`,
 `github.com/farsightsec/golang-framestream@v0.3.0`) so envelopes are
 byte-compatible.
 
+## Running a native EDM alongside the load-gen
+
+The load-gen ships frames over Frame Streams to a running EDM process. The
+upstream EDM container image is private (`ghcr.io/dnstapir/edm:latest`
+returns `DENIED` for anonymous pulls), so the easiest path is a native
+build from source. Both binaries on the same host means the load-gen's
+default `--target tcp://127.0.0.1:53535` and `--metrics-url
+http://127.0.0.1:2112/metrics` work as-is.
+
+Three build steps. From a fresh shell:
+
+```bash
+# 1. Clone and build dnstapir-edm.
+git clone https://github.com/dnstapir/edm.git /tmp/dnstapir-edm
+cd /tmp/dnstapir-edm
+go build -o /tmp/dnstapir-edm-bin ./cmd/dnstapir-edm
+
+# 2. Clone and build dnstapir-cli (only used to compile the DAWG file).
+git clone https://github.com/dnstapir/cli.git /tmp/dnstapir-cli
+make -C /tmp/dnstapir-cli build
+
+# 3. Build a tiny DAWG of "well-known" domains and an EDM config.
+mkdir -p /tmp/edm-config /tmp/edm-data
+cat > /tmp/tiny-domains.csv <<'EOF'
+1,example.com
+2,example.org
+3,example.net
+4,iana.org
+5,wikipedia.org
+6,cloudflare.com
+7,google.com
+8,github.com
+EOF
+/tmp/dnstapir-cli/out/dnstapir-cli --standalone dawg compile \
+    --format csv \
+    --src /tmp/tiny-domains.csv \
+    --dawg /tmp/edm-config/well-known-domains.dawg
+echo "cryptopan-key = \"$(openssl rand -base64 15)\"" \
+    > /tmp/edm-config/edm.toml
+```
+
+Then start EDM. The flags below disable MQTT and histogram upload (so EDM
+runs with no upstream connectivity) and point it at TCP `:53535` for input
+and the default `:2112` for `/metrics`:
+
+```bash
+/tmp/dnstapir-edm-bin run \
+    --input-tcp 127.0.0.1:53535 \
+    --data-dir /tmp/edm-data \
+    --config-file /tmp/edm-config/edm.toml \
+    --well-known-domains-file /tmp/edm-config/well-known-domains.dawg \
+    --disable-mqtt \
+    --disable-histogram-sender
+```
+
+EDM logs JSON to stdout. A successful start ends with lines like
+`creating plaintext dnstap TCP socket` (input is up) and a goroutine
+spinning up minimiser workers. To confirm `/metrics` is live:
+
+```bash
+curl -s localhost:2112/metrics | grep '^edm_processed_dnstap_total'
+# edm_processed_dnstap_total 0
+```
+
+The load-gen can now run against this instance with no further setup. To
+make EDM and the load-gen share the *same* well-known set (so the
+wellknown-mix knob is honest), pass the same DAWG to both:
+
+```bash
+./edm-loadgen run \
+    --well-known-source /tmp/tiny-domains.csv \
+    --qps 200
+```
+
+Tools wrappers for the build-dawg step live in
+[`tools/build-dawg.sh`](tools/build-dawg.sh) and a Tranco top-1M fetcher
+in [`tools/fetch-tranco.sh`](tools/fetch-tranco.sh).
+
+> **Note**: the upstream EDM hard-codes its `/metrics` listener to
+> `127.0.0.1:2112` and pprof to `127.0.0.1:6060`. That's fine when both
+> EDM and the load-gen run on the same host (the default). To scrape EDM
+> from another host or container, patch
+> `pkg/runner/runner.go` and replace `"127.0.0.1:2112"` and
+> `"127.0.0.1:6060"` with `"0.0.0.0:..."` before `go build`.
+
 ## Quick start
 
 Assuming a running native EDM at `127.0.0.1:53535` (with `/metrics` on
