@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-EDM_SRC="${EDM_SRC:-/tmp/dnstapir-edm}"
+EDM_SRC="${EDM_SRC:-../edm}"
 EDM_CONFIG="${EDM_CONFIG:-/tmp/edm-config}"
 EDM_DATA="${EDM_DATA:-/tmp/edm-data}"
 KEYS_DIR="${KEYS_DIR:-$PWD/keys}"
@@ -125,7 +125,7 @@ setsid bash -c "
         --data-dir '$EDM_DATA' \
         --config-file '$EDM_CONFIG/edm.toml' \
         --well-known-domains-file '$EDM_CONFIG/well-known-domains.dawg' \
-        --minimiser-workers 8 \
+        --minimiser-workers 0 \
         --disable-histogram-sender \
         --mqtt-server 'tls://$MQTT_ENDPOINT' \
         --mqtt-keepalive 30 \
