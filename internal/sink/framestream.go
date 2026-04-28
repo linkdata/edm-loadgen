@@ -65,13 +65,22 @@ func Dial(target string, opt Options) (s *Sink, err error) {
 	return
 }
 
-// Send marshals dt and writes it as a single dnstap frame.
+// Send marshals dt and writes it as a single dnstap frame. Not safe for
+// concurrent callers — the underlying framestream.Writer interleaves length
+// prefix + payload as two writes. Use one sender goroutine.
 func (s *Sink) Send(dt *dnstap.Dnstap) error {
 	frame, err := proto.Marshal(dt)
 	if err != nil {
 		return fmt.Errorf("sink: marshal: %w", err)
 	}
-	if _, err = s.w.WriteFrame(frame); err != nil {
+	return s.SendBytes(frame)
+}
+
+// SendBytes writes a pre-marshalled dnstap frame. Same concurrency rule as
+// Send: one goroutine at a time. Used by the multi-worker producer pipeline
+// where N workers do proto.Marshal in parallel and a single sender does I/O.
+func (s *Sink) SendBytes(frame []byte) error {
+	if _, err := s.w.WriteFrame(frame); err != nil {
 		return fmt.Errorf("sink: writeframe: %w", err)
 	}
 	return nil

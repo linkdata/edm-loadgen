@@ -68,15 +68,17 @@ func (m *Mixer) Pick() pattern.Generator {
 // per-pattern counter pointers.
 func (m *Mixer) Slots() []Slot { return m.slots }
 
-// FromState builds a Mixer wired to the standard set of patterns. Beacon is
-// returned separately because it pumps its own cadence; the caller is
-// expected to spin a dedicated goroutine for it.
+// NewWithPatterns builds a single Mixer over a fresh set of pattern
+// instances backed by domains. seed gives this Mixer's pattern RNGs an
+// independent stream from any other Mixer built with a different seed.
 //
-// domainsPath is forwarded to the Background generator.
-func FromState(st *state.State, domainsPath string) (*Mixer, *pattern.Beacon, error) {
-	bg, err := pattern.NewBackground(st, domainsPath)
+// Pattern internals (math/rand/v2.Rand, Exfil cursor/session, etc.) are NOT
+// safe for concurrent callers, so each producer worker should hold its own
+// Mixer built by this constructor.
+func NewWithPatterns(st *state.State, domains []string, seed uint64) (*Mixer, error) {
+	bg, err := pattern.NewBackground(st, domains, seed)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	wk := pattern.NewWellKnown(bg, func() float64 {
 		st.RLock()
@@ -86,13 +88,12 @@ func FromState(st *state.State, domainsPath string) (*Mixer, *pattern.Beacon, er
 	dga := pattern.NewDGA(st)
 	ff, err := pattern.NewFastFlux(st)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	dd := pattern.NewDynDNS(st)
 	exfil := pattern.NewExfil(st)
 	exotic := pattern.NewExotic(st, bg)
 	ev := pattern.NewEvasion(st, dga, exfil, exotic)
-	beacon := pattern.NewBeacon(st)
 
 	slots := []Slot{
 		{Gen: bg, Weight: &st.Mix.Background},
@@ -104,5 +105,22 @@ func FromState(st *state.State, domainsPath string) (*Mixer, *pattern.Beacon, er
 		{Gen: exotic, Weight: &st.Mix.Exotic},
 		{Gen: ev, Weight: &st.Mix.Evasion},
 	}
-	return New(slots), beacon, nil
+	return New(slots), nil
+}
+
+// FromState builds a single Mixer plus a single Beacon (which has its own
+// cadence). Equivalent to one worker's view; the producer creates more
+// Mixers itself for additional workers.
+//
+// domainsPath is loaded once by this call.
+func FromState(st *state.State, domainsPath string) (*Mixer, *pattern.Beacon, error) {
+	domains, err := pattern.LoadDomains(domainsPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	m, err := NewWithPatterns(st, domains, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	return m, pattern.NewBeacon(st), nil
 }

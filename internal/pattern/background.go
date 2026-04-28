@@ -25,13 +25,13 @@ type Background struct {
 	rng      *rand.Rand
 }
 
-// NewBackground loads a domain list into memory and prepares the samplers.
-// If the list is empty, Background falls back to a small built-in list.
-func NewBackground(st *state.State, domainsPath string) (*Background, error) {
-	domains, err := loadDomainList(domainsPath)
-	if err != nil {
-		return nil, fmt.Errorf("background: load domains: %w", err)
-	}
+// NewBackground constructs a Background generator using the supplied domain
+// list. Use LoadDomains to read a top-domains file once and pass the slice
+// to many NewBackground calls (one per worker).
+//
+// seed adds per-instance entropy so multiple Backgrounds get different RNG
+// streams.
+func NewBackground(st *state.State, domains []string, seed uint64) (*Background, error) {
 	if len(domains) == 0 {
 		domains = []string{
 			"example.com", "example.org", "example.net",
@@ -44,7 +44,7 @@ func NewBackground(st *state.State, domainsPath string) (*Background, error) {
 	bag := buildQtypeBag(st.Background.QTypeDist)
 	st.RUnlock()
 
-	rng := rand.New(rand.NewPCG(0, uint64(nowFunc().UnixNano())))
+	rng := rand.New(rand.NewPCG(seed, uint64(nowFunc().UnixNano())))
 	zipf := rand.NewZipf(rng, alpha, 1.0, uint64(len(domains)-1))
 	return &Background{
 		st:         st,
@@ -54,6 +54,16 @@ func NewBackground(st *state.State, domainsPath string) (*Background, error) {
 		clientPool: makeClientPool(rng, 256),
 		rng:        rng,
 	}, nil
+}
+
+// LoadDomains reads a CSV/text top-domains list. Empty path → nil slice.
+// Use this once and share the result across multiple NewBackground calls.
+func LoadDomains(path string) ([]string, error) {
+	domains, err := loadDomainList(path)
+	if err != nil {
+		return nil, fmt.Errorf("pattern: load domains %q: %w", path, err)
+	}
+	return domains, nil
 }
 
 // Name returns the pattern identifier.

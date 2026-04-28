@@ -39,7 +39,7 @@ func mustNext(t *testing.T, g Generator) Query {
 
 func TestBackgroundEmits(t *testing.T) {
 	st := newTestState(t)
-	bg, err := NewBackground(st, "")
+	bg, err := NewBackground(st, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestBackgroundEmits(t *testing.T) {
 
 func TestWellKnownFractionRoughlyHonoured(t *testing.T) {
 	st := newTestState(t)
-	bg, err := NewBackground(st, "")
+	bg, err := NewBackground(st, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestExfilLabelsUnique(t *testing.T) {
 func TestExoticPicksConfiguredTypes(t *testing.T) {
 	st := newTestState(t)
 	st.Exotic.RecordTypes = []string{"TXT", "CNAME", "NULL"}
-	bg, _ := NewBackground(st, "")
+	bg, _ := NewBackground(st, nil, 0)
 	ex := NewExotic(st, bg)
 	types := map[uint16]int{}
 	for i := 0; i < 200; i++ {
@@ -175,7 +175,7 @@ func TestExoticPicksConfiguredTypes(t *testing.T) {
 
 func TestEvasionDelegates(t *testing.T) {
 	st := newTestState(t)
-	bg, _ := NewBackground(st, "")
+	bg, _ := NewBackground(st, nil, 0)
 	dga := NewDGA(st)
 	exfil := NewExfil(st)
 	exotic := NewExotic(st, bg)

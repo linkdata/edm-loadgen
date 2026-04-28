@@ -15,6 +15,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof" //nolint:gosec // attached to a non-default mux only when --pprof is set
 	"net/netip"
 	"os"
 	"os/signal"
@@ -26,7 +28,7 @@ import (
 
 	"github.com/linkdata/edm-loadgen/internal/dns"
 	"github.com/linkdata/edm-loadgen/internal/dnstap"
-	"github.com/linkdata/edm-loadgen/internal/mix"
+	"github.com/linkdata/edm-loadgen/internal/pattern"
 	"github.com/linkdata/edm-loadgen/internal/mqtt"
 	"github.com/linkdata/edm-loadgen/internal/pki"
 	"github.com/linkdata/edm-loadgen/internal/producer"
@@ -130,6 +132,8 @@ func runHeadless(argv []string) {
 	target := fs.String("target", "tcp://127.0.0.1:53535", "EDM Frame Streams socket")
 	metricsURL := fs.String("metrics-url", "http://127.0.0.1:2112/metrics", "EDM metrics URL")
 	qps := fs.Int("qps", 100, "queries per second")
+	workers := fs.Int("workers", 0, "number of parallel builder goroutines (0 = GOMAXPROCS)")
+	pprofAddr := fs.String("pprof", "", "if set, serve net/http/pprof at this address (e.g. :6061)")
 	duration := fs.Duration("duration", 0, "total run time, 0 = until SIGINT")
 	domains := fs.String("well-known-source", "", "CSV/text top-domains list")
 	configPath := fs.String("config", "", "JSON config file (overlaid before flags)")
@@ -190,10 +194,11 @@ func runHeadless(argv []string) {
 	}
 	st.SetRunning(true)
 
-	mixer, beacon, err := mix.FromState(st, *domains)
+	domainList, err := pattern.LoadDomains(*domains)
 	if err != nil {
-		die("mix: %v", err)
+		die("domains: %v", err)
 	}
+	beacon := pattern.NewBeacon(st)
 	snk, err := sink.Dial(*target, sink.Options{Timeout: 5 * time.Second, RetryInterval: 500 * time.Millisecond})
 	if err != nil {
 		die("dial: %v", err)
@@ -219,8 +224,9 @@ func runHeadless(argv []string) {
 	if err := startMQTT(rootCtx, st); err != nil {
 		die("mqtt: %v", err)
 	}
+	startPprof(*pprofAddr)
 
-	prod := producer.New(st, mixer, beacon, snk)
+	prod := producer.New(st, domainList, beacon, snk, *workers)
 	go func() { _ = prod.Run(rootCtx) }()
 
 	scraper := verify.NewScraper(*metricsURL)
@@ -309,6 +315,8 @@ func runServe(argv []string) {
 	metricsURL := fs.String("metrics-url", "http://127.0.0.1:2112/metrics", "EDM metrics URL")
 	listen := fs.String("listen", ":8090", "HTTP listen address for the JaWS UI")
 	qps := fs.Int("qps", 100, "starting queries per second")
+	workers := fs.Int("workers", 0, "number of parallel builder goroutines (0 = GOMAXPROCS)")
+	pprofAddr := fs.String("pprof", "", "if set, serve net/http/pprof at this address (e.g. :6061)")
 	domains := fs.String("well-known-source", "", "CSV/text top-domains list")
 	configPath := fs.String("config", "", "JSON config file (overlaid before flags)")
 	reportInterval := fs.Duration("report-interval", 2*time.Second, "verifier scrape cadence")
@@ -357,10 +365,11 @@ func runServe(argv []string) {
 	}
 	st.SetRunning(!*startStopped)
 
-	mixer, beacon, err := mix.FromState(st, *domains)
+	domainList, err := pattern.LoadDomains(*domains)
 	if err != nil {
-		die("mix: %v", err)
+		die("domains: %v", err)
 	}
+	beacon := pattern.NewBeacon(st)
 	snk, err := sink.Dial(*target, sink.Options{Timeout: 5 * time.Second, RetryInterval: 500 * time.Millisecond})
 	if err != nil {
 		die("dial: %v", err)
@@ -385,8 +394,9 @@ func runServe(argv []string) {
 	if err := startMQTT(rootCtx, st); err != nil {
 		die("mqtt: %v", err)
 	}
+	startPprof(*pprofAddr)
 
-	prod := producer.New(st, mixer, beacon, snk)
+	prod := producer.New(st, domainList, beacon, snk, *workers)
 	go func() { _ = prod.Run(rootCtx) }()
 
 	scraper := verify.NewScraper(*metricsURL)
@@ -396,6 +406,21 @@ func runServe(argv []string) {
 	if err := srv.Run(rootCtx); err != nil && err != context.Canceled {
 		die("serve: %v", err)
 	}
+}
+
+// startPprof launches an HTTP server on addr that serves net/http/pprof. The
+// pprof package registers its handlers on http.DefaultServeMux at import
+// time; we only need to put a listener in front of it. No-op when addr is
+// empty.
+func startPprof(addr string) {
+	if addr == "" {
+		return
+	}
+	go func() {
+		// Best-effort: a port collision here just means no profiling.
+		_ = http.ListenAndServe(addr, nil) //nolint:gosec // dev tooling only
+	}()
+	fmt.Fprintf(os.Stderr, "edm-loadgen pprof on http://%s/debug/pprof/\n", addr)
 }
 
 // startMQTT starts the embedded broker if st.MQTT.Listen is set. It ensures
