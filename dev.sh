@@ -24,6 +24,11 @@ MQTT_LISTEN="${MQTT_LISTEN:-:8883}"
 LOADGEN_LISTEN="${LOADGEN_LISTEN:-:8090}"
 EDM_INPUT="${EDM_INPUT:-127.0.0.1:53535}"
 EDM_LOG="${EDM_LOG:-/tmp/dev-edm.log}"
+# Upstream EDM marks --minimiser-workers as a required positive int (the
+# fork in this workspace also accepts 0=GOMAXPROCS, but we don't want to
+# rely on that here). Pick a sensible default from the host CPU count;
+# override with EDM_WORKERS=N if you want something specific.
+EDM_WORKERS="${EDM_WORKERS:-$(nproc)}"
 
 # ----- sanity checks -------------------------------------------------------
 
@@ -152,7 +157,7 @@ setsid bash -c "
         --data-dir '$EDM_DATA' \
         --config-file '$EDM_CONFIG/edm.toml' \
         --well-known-domains-file '$EDM_CONFIG/well-known-domains.dawg' \
-        --minimiser-workers 0 \
+        --minimiser-workers '$EDM_WORKERS' \
         --disable-histogram-sender \
         --disable-mqtt-filequeue \
         --mqtt-server 'tls://$MQTT_ENDPOINT' \
