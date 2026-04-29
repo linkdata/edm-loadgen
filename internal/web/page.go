@@ -7,6 +7,7 @@
 package web
 
 import (
+	"fmt"
 	"html/template"
 
 	"github.com/linkdata/jaws"
@@ -198,3 +199,74 @@ func (p *Page) ObservedQPSText() bind.HTMLGetter {
 		return template.HTML(formatCount(int64(v))) // #nosec G203
 	}, &p.st.ObservedQPS)
 }
+
+// mixPercent renders the share of `w` against the sum of all mix weights as
+// a percentage. The HTMLGetter depends on every mix-weight pointer, so a
+// change to any weight (which dirties only that pointer's tag) refreshes
+// every percent widget — keeping the displayed values consistent.
+//
+// JaWS' bind.New install on each mix slider dirties exactly the affected
+// `&p.st.Mix.X` pointer; we list every pointer in deps so a change to any
+// of them triggers a re-render here too.
+func (p *Page) mixPercent(w *int32) bind.HTMLGetter {
+	return bind.HTMLGetterFunc(func(*jaws.Element) template.HTML {
+		var total int32
+		for _, pp := range p.allMixPointers() {
+			if v := atomicLoad32(pp); v > 0 {
+				total += v
+			}
+		}
+		cur := atomicLoad32(w)
+		if cur <= 0 || total <= 0 {
+			return template.HTML("0%") // #nosec G203 — fixed string
+		}
+		// One decimal place: reads cleanly when weights split unevenly
+		// (e.g. 33.3% / 33.3% / 33.3%) without being noisy at integer
+		// totals.
+		return template.HTML(fmt.Sprintf("%.1f%%", 100*float64(cur)/float64(total))) // #nosec G203
+	}, p.allMixDeps()...)
+}
+
+// allMixPointers returns the underlying weight pointers in display order.
+func (p *Page) allMixPointers() []*int32 {
+	return []*int32{
+		&p.st.Mix.Background,
+		&p.st.Mix.WellKnown,
+		&p.st.Mix.DGA,
+		&p.st.Mix.Beacon,
+		&p.st.Mix.FastFlux,
+		&p.st.Mix.DynDNS,
+		&p.st.Mix.Exfil,
+		&p.st.Mix.Exotic,
+		&p.st.Mix.Evasion,
+	}
+}
+
+// allMixDeps returns the same pointers as []any for use as JaWS dep tags.
+func (p *Page) allMixDeps() []any {
+	ptrs := p.allMixPointers()
+	deps := make([]any, len(ptrs))
+	for i, pp := range ptrs {
+		deps[i] = pp
+	}
+	return deps
+}
+
+// MixBackgroundPercent renders the background pattern's share.
+func (p *Page) MixBackgroundPercent() bind.HTMLGetter { return p.mixPercent(&p.st.Mix.Background) }
+// MixWellKnownPercent renders the wellknown wrapper's share.
+func (p *Page) MixWellKnownPercent() bind.HTMLGetter { return p.mixPercent(&p.st.Mix.WellKnown) }
+// MixDGAPercent renders the DGA pattern's share.
+func (p *Page) MixDGAPercent() bind.HTMLGetter { return p.mixPercent(&p.st.Mix.DGA) }
+// MixBeaconPercent renders the beacon pattern's share.
+func (p *Page) MixBeaconPercent() bind.HTMLGetter { return p.mixPercent(&p.st.Mix.Beacon) }
+// MixFastFluxPercent renders the fastflux pattern's share.
+func (p *Page) MixFastFluxPercent() bind.HTMLGetter { return p.mixPercent(&p.st.Mix.FastFlux) }
+// MixDynDNSPercent renders the dyn-DNS pattern's share.
+func (p *Page) MixDynDNSPercent() bind.HTMLGetter { return p.mixPercent(&p.st.Mix.DynDNS) }
+// MixExfilPercent renders the exfil pattern's share.
+func (p *Page) MixExfilPercent() bind.HTMLGetter { return p.mixPercent(&p.st.Mix.Exfil) }
+// MixExoticPercent renders the exotic pattern's share.
+func (p *Page) MixExoticPercent() bind.HTMLGetter { return p.mixPercent(&p.st.Mix.Exotic) }
+// MixEvasionPercent renders the evasion pattern's share.
+func (p *Page) MixEvasionPercent() bind.HTMLGetter { return p.mixPercent(&p.st.Mix.Evasion) }
