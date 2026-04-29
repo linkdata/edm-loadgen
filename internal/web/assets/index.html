@@ -10,6 +10,14 @@
 <body>
   <main class="container py-3">
     <h1 class="h3 mb-3">edm-loadgen control panel</h1>
+    <!--
+      Wrapped in a form with autocomplete=off so browsers don't surface
+      autofill suggestions on the QPS / target / metrics-url fields, and
+      onsubmit=return false; so a stray Enter in a text input doesn't
+      attempt to navigate. JaWS handles all input via WebSocket, so
+      there is no real submit handler.
+    -->
+    <form autocomplete="off" onsubmit="return false;">
 
     <section class="card mb-3">
       <div class="card-body">
@@ -97,39 +105,66 @@
         <p class="text-muted small">Relative weights — they are normalised, only ratios matter.</p>
         <div class="row g-3">
           <div class="col-12 col-md-6 col-lg-4">
-            <label class="form-label mb-1">background</label>
+            <label class="form-label mb-1">
+              background
+              <span class="badge text-bg-light ms-1">{{$.Span .MixBackgroundPercent}}</span>
+            </label>
             {{$.Range .MixBackground `class="form-range" min="0" max="100" step="1"`}}
           </div>
           <div class="col-12 col-md-6 col-lg-4">
-            <label class="form-label mb-1">wellknown</label>
+            <label class="form-label mb-1">
+              wellknown
+              <span class="badge text-bg-light ms-1">{{$.Span .MixWellKnownPercent}}</span>
+            </label>
             {{$.Range .MixWellKnown `class="form-range" min="0" max="100" step="1"`}}
           </div>
           <div class="col-12 col-md-6 col-lg-4">
-            <label class="form-label mb-1">dga</label>
+            <label class="form-label mb-1">
+              dga
+              <span class="badge text-bg-light ms-1">{{$.Span .MixDGAPercent}}</span>
+            </label>
             {{$.Range .MixDGA `class="form-range" min="0" max="100" step="1"`}}
           </div>
           <div class="col-12 col-md-6 col-lg-4">
-            <label class="form-label mb-1">beacon</label>
+            <label class="form-label mb-1">
+              beacon
+              <span class="badge text-bg-light ms-1">{{$.Span .MixBeaconPercent}}</span>
+            </label>
             {{$.Range .MixBeacon `class="form-range" min="0" max="100" step="1"`}}
           </div>
           <div class="col-12 col-md-6 col-lg-4">
-            <label class="form-label mb-1">fastflux</label>
+            <label class="form-label mb-1">
+              fastflux
+              <span class="badge text-bg-light ms-1">{{$.Span .MixFastFluxPercent}}</span>
+            </label>
             {{$.Range .MixFastFlux `class="form-range" min="0" max="100" step="1"`}}
           </div>
           <div class="col-12 col-md-6 col-lg-4">
-            <label class="form-label mb-1">dyndns</label>
+            <label class="form-label mb-1">
+              dyndns
+              <span class="badge text-bg-light ms-1">{{$.Span .MixDynDNSPercent}}</span>
+            </label>
             {{$.Range .MixDynDNS `class="form-range" min="0" max="100" step="1"`}}
           </div>
           <div class="col-12 col-md-6 col-lg-4">
-            <label class="form-label mb-1">exfil</label>
+            <label class="form-label mb-1">
+              exfil
+              <span class="badge text-bg-light ms-1">{{$.Span .MixExfilPercent}}</span>
+            </label>
             {{$.Range .MixExfil `class="form-range" min="0" max="100" step="1"`}}
           </div>
           <div class="col-12 col-md-6 col-lg-4">
-            <label class="form-label mb-1">exotic</label>
+            <label class="form-label mb-1">
+              exotic
+              <span class="badge text-bg-light ms-1">{{$.Span .MixExoticPercent}}</span>
+            </label>
             {{$.Range .MixExotic `class="form-range" min="0" max="100" step="1"`}}
           </div>
           <div class="col-12 col-md-6 col-lg-4">
-            <label class="form-label mb-1">evasion</label>
+            <label class="form-label mb-1">
+              evasion
+              <span class="badge text-bg-light ms-1">{{$.Span .MixEvasionPercent}}</span>
+            </label>
             {{$.Range .MixEvasion `class="form-range" min="0" max="100" step="1"`}}
           </div>
         </div>
@@ -149,6 +184,8 @@
         </table>
       </div>
     </section>
+
+    </form>
   </main>
   {{$.TailHTML}}
 </body>
