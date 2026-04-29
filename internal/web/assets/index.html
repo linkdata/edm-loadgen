@@ -107,6 +107,8 @@
           <div class="col-12 col-md-6 col-lg-4">
             <label class="form-label mb-1">
               background
+              <span class="text-muted small mix-info" tabindex="0" role="img" aria-label="info"
+                    title="Realistic background traffic. Zipfian sample of a top-domains list (DomCop / Tranco) with a configurable qtype distribution.">&#9432;</span>
               <span class="badge text-bg-light ms-1">{{$.Span .MixBackgroundPercent}}</span>
             </label>
             {{$.Range .MixBackground `class="form-range" min="0" max="100" step="1"`}}
@@ -114,6 +116,8 @@
           <div class="col-12 col-md-6 col-lg-4">
             <label class="form-label mb-1">
               wellknown
+              <span class="text-muted small mix-info" tabindex="0" role="img" aria-label="info"
+                    title="Background traffic mutated so a configurable fraction lands OUTSIDE EDM's well-known-domains DAWG, exercising the new-qname path. Wraps the background generator.">&#9432;</span>
               <span class="badge text-bg-light ms-1">{{$.Span .MixWellKnownPercent}}</span>
             </label>
             {{$.Range .MixWellKnown `class="form-range" min="0" max="100" step="1"`}}
@@ -121,6 +125,8 @@
           <div class="col-12 col-md-6 col-lg-4">
             <label class="form-label mb-1">
               dga
+              <span class="text-muted small mix-info" tabindex="0" role="img" aria-label="info"
+                    title="Domain-generation algorithm style names: Conficker (high-entropy alphanumeric), Suppobox (concatenated dictionary words), Necurs (long lowercase), Pykspa (pronounceable cons/vowel). Always lands in the new-qname path.">&#9432;</span>
               <span class="badge text-bg-light ms-1">{{$.Span .MixDGAPercent}}</span>
             </label>
             {{$.Range .MixDGA `class="form-range" min="0" max="100" step="1"`}}
@@ -128,6 +134,8 @@
           <div class="col-12 col-md-6 col-lg-4">
             <label class="form-label mb-1">
               beacon
+              <span class="text-muted small mix-info" tabindex="0" role="img" aria-label="info"
+                    title="One fixed C2-style domain queried at a configured interval ± jitter. Models periodic command-and-control check-ins. Runs on its own time-driven goroutine, not the QPS bucket.">&#9432;</span>
               <span class="badge text-bg-light ms-1">{{$.Span .MixBeaconPercent}}</span>
             </label>
             {{$.Range .MixBeacon `class="form-range" min="0" max="100" step="1"`}}
@@ -135,6 +143,8 @@
           <div class="col-12 col-md-6 col-lg-4">
             <label class="form-label mb-1">
               fastflux
+              <span class="text-muted small mix-info" tabindex="0" role="img" aria-label="info"
+                    title="Single domain whose answer A record rotates through an IP pool. Exercises EDM's per-IP Crypto-PAn cache and the cardinality-tracking HLL path.">&#9432;</span>
               <span class="badge text-bg-light ms-1">{{$.Span .MixFastFluxPercent}}</span>
             </label>
             {{$.Range .MixFastFlux `class="form-range" min="0" max="100" step="1"`}}
@@ -142,6 +152,8 @@
           <div class="col-12 col-md-6 col-lg-4">
             <label class="form-label mb-1">
               dyndns
+              <span class="text-muted small mix-info" tabindex="0" role="img" aria-label="info"
+                    title="Random subdomains under dynamic-DNS providers (no-ip.com / duckdns.org / freedns.afraid.org). Each query has a fresh hex label so it lands in the new-qname path.">&#9432;</span>
               <span class="badge text-bg-light ms-1">{{$.Span .MixDynDNSPercent}}</span>
             </label>
             {{$.Range .MixDynDNS `class="form-range" min="0" max="100" step="1"`}}
@@ -149,6 +161,8 @@
           <div class="col-12 col-md-6 col-lg-4">
             <label class="form-label mb-1">
               exfil
+              <span class="text-muted small mix-info" tabindex="0" role="img" aria-label="info"
+                    title="Subdomain-encoded data exfiltration. Three sub-modes: dnscat2 (hex chunks), iodine (gzip+base32 with sequence header), raw-b32. Each query carries a chunk of session payload as a label.">&#9432;</span>
               <span class="badge text-bg-light ms-1">{{$.Span .MixExfilPercent}}</span>
             </label>
             {{$.Range .MixExfil `class="form-range" min="0" max="100" step="1"`}}
@@ -156,6 +170,8 @@
           <div class="col-12 col-md-6 col-lg-4">
             <label class="form-label mb-1">
               exotic
+              <span class="text-muted small mix-info" tabindex="0" role="img" aria-label="info"
+                    title="Background qnames with TXT / CNAME / NULL response payloads of configurable size. Verifies the pipeline doesn't choke on non-A responses or large records.">&#9432;</span>
               <span class="badge text-bg-light ms-1">{{$.Span .MixExoticPercent}}</span>
             </label>
             {{$.Range .MixExotic `class="form-range" min="0" max="100" step="1"`}}
@@ -163,6 +179,8 @@
           <div class="col-12 col-md-6 col-lg-4">
             <label class="form-label mb-1">
               evasion
+              <span class="text-muted small mix-info" tabindex="0" role="img" aria-label="info"
+                    title="Meta-pattern that composes dga + exfil + exotic with cross-pattern jitter, weighted by the off / light / medium / heavy profile. Stress-tests the pipeline under combined load.">&#9432;</span>
               <span class="badge text-bg-light ms-1">{{$.Span .MixEvasionPercent}}</span>
             </label>
             {{$.Range .MixEvasion `class="form-range" min="0" max="100" step="1"`}}

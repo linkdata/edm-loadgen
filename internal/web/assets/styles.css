@@ -3,3 +3,14 @@ body { background: #f8f9fa; }
 .display-6 { font-variant-numeric: tabular-nums; }
 .h4 { font-variant-numeric: tabular-nums; }
 table.table-sm td, table.table-sm th { font-variant-numeric: tabular-nums; }
+
+/* Info-icon affordance for the Mix sliders. The tooltip itself is
+   browser-native (the title attribute) — we only style the visible glyph
+   so it reads as interactive. */
+.mix-info {
+  cursor: help;
+  font-size: 1rem;
+  vertical-align: middle;
+  margin-left: 0.15rem;
+}
+.mix-info:hover, .mix-info:focus { color: #495057; outline: none; }
