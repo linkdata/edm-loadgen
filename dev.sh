@@ -56,12 +56,38 @@ MQTT_ENDPOINT="$(mqtt_endpoint "$MQTT_LISTEN")"
 
 EDM_PID=""
 
+# drain_pgid <pgid> <label> — wait for every process in <pgid> to exit.
+#
+# Why this exists: `wait $PID` only tracks direct children of this shell. A
+# `go run` spawns the actual binary as a grandchild that lives in the same
+# process group (because we used setsid), but is not waitable here. So when
+# `go run` dies, `wait` returns immediately while the real binary keeps
+# running — for EDM that means it keeps holding the pebble lock and the
+# next dev.sh run fails.
+#
+# After SIGTERM-on-pgid, poll the group until it drains. Escalate to
+# SIGKILL if the group is still populated after 10s.
+drain_pgid() {
+    local pgid="$1" label="$2"
+    local deadline=$(( $(date +%s) + 10 ))
+    while pgrep -g "$pgid" >/dev/null 2>&1; do
+        if (( $(date +%s) >= deadline )); then
+            echo "dev.sh: $label did not exit within 10s, sending SIGKILL" >&2
+            kill -KILL -- "-$pgid" 2>/dev/null || true
+            break
+        fi
+        sleep 0.2
+    done
+    while pgrep -g "$pgid" >/dev/null 2>&1; do sleep 0.1; done
+}
+
 cleanup() {
     # Loadgen first (in case it survived the trap forward, e.g. if it was
     # killed via SIGKILL).
     if [[ -n "${LOADGEN_PID:-}" ]] && kill -0 "$LOADGEN_PID" 2>/dev/null; then
         kill -TERM -- "-$LOADGEN_PID" 2>/dev/null || true
         wait "$LOADGEN_PID" 2>/dev/null || true
+        drain_pgid "$LOADGEN_PID" "loadgen"
     fi
     if [[ -n "$EDM_PID" ]] && kill -0 "$EDM_PID" 2>/dev/null; then
         echo
@@ -71,6 +97,7 @@ cleanup() {
         # both — plain `kill $EDM_PID` would leave the child binary orphaned.
         kill -TERM -- "-$EDM_PID" 2>/dev/null || true
         wait "$EDM_PID" 2>/dev/null || true
+        drain_pgid "$EDM_PID" "EDM"
     fi
 }
 trap cleanup EXIT
