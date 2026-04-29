@@ -1,0 +1,10 @@
+# Minimal EDM config for dev.sh
+# Most settings use defaults; only required fields are included here.
+
+cryptopan-key = "dev-secret-key-change-in-production"
+cryptopan-key-salt = "dev-salt-change-in-production"
+
+# Points to well-known-domains.dawg in the same directory
+well-known-domains-file = "/tmp/edm-config/well-known-domains.dawg"
+
+histogram-hll-explicit-threshold = 20

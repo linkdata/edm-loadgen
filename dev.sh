@@ -37,15 +37,33 @@ if [[ ! -d "$EDM_SRC" ]]; then
     echo "        clone https://github.com/dnstapir/edm there or set EDM_SRC" >&2
     exit 1
 fi
+
+# Bootstrap /tmp/edm-config if missing (copy from this script's configs/ dir)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ ! -f "$EDM_CONFIG/edm.toml" ]]; then
-    echo "dev.sh: missing $EDM_CONFIG/edm.toml" >&2
-    echo "        see README.md > 'Running a native EDM' for the recipe" >&2
-    exit 1
+    mkdir -p "$EDM_CONFIG"
+    if [[ -f "$SCRIPT_DIR/configs/edm.toml" ]]; then
+        echo "dev.sh: copying edm.toml from $SCRIPT_DIR/configs/"
+        cp "$SCRIPT_DIR/configs/edm.toml" "$EDM_CONFIG/edm.toml"
+    else
+        echo "dev.sh: missing $SCRIPT_DIR/configs/edm.toml" >&2
+        echo "        see README.md > 'Running a native EDM' for the recipe" >&2
+        exit 1
+    fi
 fi
+
 if [[ ! -f "$EDM_CONFIG/well-known-domains.dawg" ]]; then
-    echo "dev.sh: missing $EDM_CONFIG/well-known-domains.dawg" >&2
-    exit 1
+    echo "dev.sh: fetching well-known-domains.dawg from upstream EDM..."
+    mkdir -p "$EDM_CONFIG"
+    if ! curl -fsSL \
+        "https://raw.githubusercontent.com/dnstapir/edm/main/rpm/SOURCES/well-known-domains.dawg" \
+        -o "$EDM_CONFIG/well-known-domains.dawg"; then
+        echo "dev.sh: failed to fetch well-known-domains.dawg from GitHub" >&2
+        echo "        check network and https://github.com/dnstapir/edm/blob/main/rpm/SOURCES/well-known-domains.dawg" >&2
+        exit 1
+    fi
 fi
+
 mkdir -p "$EDM_DATA"
 
 # Convert a possibly-bare-port (":8883") to a connectable host:port for EDM.
