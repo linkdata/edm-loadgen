@@ -137,6 +137,84 @@ setsid bash -c "
 " >"$EDM_LOG" 2>&1 &
 EDM_PID=$!
 
+# ----- EDM liveness check --------------------------------------------------
+#
+# `go run` builds + spawns EDM through a wrapper goroutine; if EDM exits
+# right after start (most commonly: pebble.Open fails because an orphaned
+# EDM still holds the per-DB flock; or a config file is invalid; or the
+# input TCP port is taken) we have to notice here, otherwise dev.sh runs
+# happily with load-gen wired to nothing and the user gets a silent
+# zero-throughput stall.
+#
+# Two-phase check:
+#   1. Stabilisation: poll `kill -0 $EDM_PID` until either it dies (=>
+#      our EDM failed; report) or enough time has elapsed for `go run`
+#      to compile the binary, fork-exec it, and have the binary attempt
+#      its TCP binds (an orphan-on-:53535 / :2112 produces EADDRINUSE
+#      almost immediately; a missing config produces a fast exit; etc).
+#   2. Readiness: confirm /metrics on :2112 responds.
+#
+# We can't shortcut to step 2 alone, because an orphan EDM bound to
+# :2112 will happily serve /metrics under our nose while our own EDM
+# has died from EADDRINUSE. Step 1 catches that.
+
+EDM_STABILISE_SECONDS="${EDM_STABILISE_SECONDS:-5}"
+EDM_READY_TIMEOUT="${EDM_READY_TIMEOUT:-15}"
+EDM_METRICS_HOST="$(echo "$EDM_INPUT" | awk -F: '{print $1}')"
+EDM_METRICS_URL="http://${EDM_METRICS_HOST}:2112/metrics"
+
+report_edm_dead() {
+    echo "dev.sh: EDM exited before becoming ready (PID $EDM_PID)" >&2
+    echo "dev.sh: tail of $EDM_LOG:" >&2
+    echo "----" >&2
+    tail -20 "$EDM_LOG" >&2 2>/dev/null || true
+    echo "----" >&2
+    echo "dev.sh: common causes:" >&2
+    echo "  (a) an orphan EDM still holds the pebble lock — look for a stale" >&2
+    echo "      dnstapir-edm process (ps ... grep dnstapir-edm) and the line" >&2
+    echo "      'pebble.Open: resource temporarily unavailable' in the log" >&2
+    echo "  (b) port ${EDM_INPUT#*:} or :2112 already in use (orphan, or" >&2
+    echo "      something else listening — ss -tnlp | grep 53535)" >&2
+    echo "  (c) config-file or DAWG path missing/invalid" >&2
+    exit 1
+}
+
+echo -n "dev.sh: waiting for EDM to stabilise (up to ${EDM_STABILISE_SECONDS}s)"
+stab_deadline=$(( $(date +%s) + EDM_STABILISE_SECONDS ))
+while (( $(date +%s) < stab_deadline )); do
+    if ! kill -0 "$EDM_PID" 2>/dev/null; then
+        echo
+        report_edm_dead
+    fi
+    echo -n "."
+    sleep 0.5
+done
+echo " alive"
+
+echo -n "dev.sh: waiting for EDM /metrics on ${EDM_METRICS_URL}"
+ready_deadline=$(( $(date +%s) + EDM_READY_TIMEOUT ))
+while true; do
+    if ! kill -0 "$EDM_PID" 2>/dev/null; then
+        echo
+        report_edm_dead
+    fi
+    if curl -fsS --max-time 1 "$EDM_METRICS_URL" >/dev/null 2>&1; then
+        echo " ok"
+        break
+    fi
+    if (( $(date +%s) >= ready_deadline )); then
+        echo
+        echo "dev.sh: EDM did not respond on /metrics within ${EDM_READY_TIMEOUT}s" >&2
+        echo "dev.sh: tail of $EDM_LOG:" >&2
+        echo "----" >&2
+        tail -20 "$EDM_LOG" >&2 2>/dev/null || true
+        echo "----" >&2
+        exit 1
+    fi
+    echo -n "."
+    sleep 0.5
+done
+
 # Forward signals to the loadgen process group.
 forward() {
     if [[ -n "${LOADGEN_PID:-}" ]] && kill -0 "$LOADGEN_PID" 2>/dev/null; then
