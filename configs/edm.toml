@@ -1,4 +1,4 @@
-# Minimal EDM config for dev.sh
+# Minimal EDM config for the --edm dev launcher.
 # Most settings use defaults; only required fields are included here.
 
 cryptopan-key = "dev-secret-key-change-in-production"

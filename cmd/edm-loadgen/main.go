@@ -5,9 +5,8 @@
 //
 //	smoke     Send N hand-crafted frames and exit (foundation gate).
 //	run       Headless: producer + verifier with a recurring text status line.
+//	serve     Producer + verifier + JaWS web UI.
 //	verify    One-shot snapshot of EDM /metrics.
-//
-// The serve subcommand (JaWS UI) is not yet wired up.
 package main
 
 import (
@@ -28,8 +27,8 @@ import (
 
 	"github.com/linkdata/edm-loadgen/internal/dns"
 	"github.com/linkdata/edm-loadgen/internal/dnstap"
-	"github.com/linkdata/edm-loadgen/internal/pattern"
 	"github.com/linkdata/edm-loadgen/internal/mqtt"
+	"github.com/linkdata/edm-loadgen/internal/pattern"
 	"github.com/linkdata/edm-loadgen/internal/pki"
 	"github.com/linkdata/edm-loadgen/internal/producer"
 	"github.com/linkdata/edm-loadgen/internal/sink"
@@ -129,14 +128,16 @@ func runVerify(argv []string) {
 // runHeadless is the main mode: producer + verifier + recurring status line.
 func runHeadless(argv []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	target := fs.String("target", "tcp://127.0.0.1:53535", "EDM Frame Streams socket")
-	metricsURL := fs.String("metrics-url", "http://127.0.0.1:2112/metrics", "EDM metrics URL")
+	defaultTarget := defaultTarget()
+	target := fs.String("target", defaultTarget, "EDM Frame Streams socket")
+	metricsURL := fs.String("metrics-url", defaultMetricsURL(defaultTarget), "EDM metrics URL")
 	qps := fs.Int("qps", 100, "queries per second")
 	workers := fs.Int("workers", 0, "number of parallel builder goroutines (0 = GOMAXPROCS)")
 	pprofAddr := fs.String("pprof", "", "if set, serve net/http/pprof at this address (e.g. :6061)")
 	duration := fs.Duration("duration", 0, "total run time, 0 = until SIGINT")
 	domains := fs.String("well-known-source", "", "CSV/text top-domains list")
 	configPath := fs.String("config", "", "JSON config file (overlaid before flags)")
+	edmPath := fs.String("edm", "", "optional EDM binary or source checkout to launch alongside the load generator")
 	reportInterval := fs.Duration("report-interval", 5*time.Second, "verifier scrape cadence")
 	mixBg := fs.Int("mix.background", 80, "")
 	mixWk := fs.Int("mix.wellknown", 0, "")
@@ -148,8 +149,8 @@ func runHeadless(argv []string) {
 	mixExotic := fs.Int("mix.exotic", 3, "")
 	mixEva := fs.Int("mix.evasion", 2, "")
 	mqttListen := fs.String("mqtt-listen", "", `enable embedded MQTT broker on this address (e.g. ":8883"); empty = off`)
-	mqttKeysDir := fs.String("mqtt-keys-dir", "./keys", "directory for the MQTT broker's TLS material (auto-generated on first use)")
-	mqttNodeName := fs.String("mqtt-node-name", "edm-loadgen-1", "EDM node name; topic prefix and client-id stem")
+	mqttKeysDir := fs.String("mqtt-keys-dir", envOr("KEYS_DIR", "./keys"), "directory for the MQTT broker's TLS material (auto-generated on first use)")
+	mqttNodeName := fs.String("mqtt-node-name", envOr("NODE_NAME", "edm-loadgen-1"), "EDM node name; topic prefix and client-id stem")
 	if err := fs.Parse(argv); err != nil {
 		os.Exit(2)
 	}
@@ -192,6 +193,7 @@ func runHeadless(argv []string) {
 	if set["mqtt-node-name"] || *configPath == "" {
 		st.MQTT.NodeName = *mqttNodeName
 	}
+	st.MQTT.Listen = defaultMQTTListen(*edmPath, st.MQTT.Listen, set["mqtt-listen"])
 	st.SetRunning(true)
 
 	domainList, err := pattern.LoadDomains(*domains)
@@ -199,7 +201,7 @@ func runHeadless(argv []string) {
 		die("domains: %v", err)
 	}
 	beacon := pattern.NewBeacon(st)
-	snk, err := sink.Dial(*target, sink.Options{Timeout: 5 * time.Second, RetryInterval: 500 * time.Millisecond})
+	snk, err := sink.Dial(st.Target, sink.Options{Timeout: 5 * time.Second, RetryInterval: 500 * time.Millisecond})
 	if err != nil {
 		die("dial: %v", err)
 	}
@@ -207,11 +209,6 @@ func runHeadless(argv []string) {
 
 	rootCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if *duration > 0 {
-		var c context.CancelFunc
-		rootCtx, c = context.WithTimeout(rootCtx, *duration)
-		defer c()
-	}
 
 	// Signal handling so Ctrl-C exits cleanly.
 	sigCh := make(chan os.Signal, 1)
@@ -221,18 +218,33 @@ func runHeadless(argv []string) {
 		cancel()
 	}()
 
-	if err := startMQTT(rootCtx, st); err != nil {
+	mqttBundle, err := startMQTT(rootCtx, st)
+	if err != nil {
 		die("mqtt: %v", err)
+	}
+	edmProc, err := startEDMIfRequested(rootCtx, *edmPath, st, mqttBundle)
+	if err != nil {
+		die("edm: %v", err)
+	}
+	if edmProc != nil {
+		defer edmProc.Stop()
 	}
 	startPprof(*pprofAddr)
 
+	runCtx := rootCtx
+	if *duration > 0 {
+		var c context.CancelFunc
+		runCtx, c = context.WithTimeout(rootCtx, *duration)
+		defer c()
+	}
+
 	prod := producer.New(st, domainList, beacon, snk, *workers)
-	go func() { _ = prod.Run(rootCtx) }()
+	go func() { _ = prod.Run(runCtx) }()
 
-	scraper := verify.NewScraper(*metricsURL)
-	go func() { _ = scraper.Run(rootCtx, st, *reportInterval) }()
+	scraper := verify.NewScraper(st.MetricsURL)
+	go func() { _ = scraper.Run(runCtx, st, st.ReportInterval) }()
 
-	statusLoop(rootCtx, st)
+	statusLoop(runCtx, st)
 }
 
 // statusLoop prints a recurring summary line every report-interval until ctx
@@ -311,20 +323,22 @@ func overlayMix(st *state.State, fs *flag.FlagSet, set map[string]bool, noConfig
 // and skips the recurring text status line (the UI is the status surface).
 func runServe(argv []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	target := fs.String("target", "tcp://127.0.0.1:53535", "EDM Frame Streams socket")
-	metricsURL := fs.String("metrics-url", "http://127.0.0.1:2112/metrics", "EDM metrics URL")
-	listen := fs.String("listen", ":8090", "HTTP listen address for the JaWS UI")
+	defaultTarget := defaultTarget()
+	target := fs.String("target", defaultTarget, "EDM Frame Streams socket")
+	metricsURL := fs.String("metrics-url", defaultMetricsURL(defaultTarget), "EDM metrics URL")
+	listen := fs.String("listen", envOr("LOADGEN_LISTEN", ":8090"), "HTTP listen address for the JaWS UI")
 	qps := fs.Int("qps", 100, "starting queries per second")
 	workers := fs.Int("workers", 0, "number of parallel builder goroutines (0 = GOMAXPROCS)")
 	pprofAddr := fs.String("pprof", "", "if set, serve net/http/pprof at this address (e.g. :6061)")
 	domains := fs.String("well-known-source", "", "CSV/text top-domains list")
 	configPath := fs.String("config", "", "JSON config file (overlaid before flags)")
+	edmPath := fs.String("edm", "", "optional EDM binary or source checkout to launch alongside the load generator")
 	reportInterval := fs.Duration("report-interval", 2*time.Second, "verifier scrape cadence")
 	uiTick := fs.Duration("ui-tick", 500*time.Millisecond, "UI broadcast cadence (live counters)")
 	startStopped := fs.Bool("start-stopped", false, "do not begin generating until the UI Run button is pressed")
 	mqttListen := fs.String("mqtt-listen", "", `enable embedded MQTT broker on this address (e.g. ":8883"); empty = off`)
-	mqttKeysDir := fs.String("mqtt-keys-dir", "./keys", "directory for the MQTT broker's TLS material (auto-generated on first use)")
-	mqttNodeName := fs.String("mqtt-node-name", "edm-loadgen-1", "EDM node name; topic prefix and client-id stem")
+	mqttKeysDir := fs.String("mqtt-keys-dir", envOr("KEYS_DIR", "./keys"), "directory for the MQTT broker's TLS material (auto-generated on first use)")
+	mqttNodeName := fs.String("mqtt-node-name", envOr("NODE_NAME", "edm-loadgen-1"), "EDM node name; topic prefix and client-id stem")
 	if err := fs.Parse(argv); err != nil {
 		os.Exit(2)
 	}
@@ -363,6 +377,7 @@ func runServe(argv []string) {
 	if set["mqtt-node-name"] || *configPath == "" {
 		st.MQTT.NodeName = *mqttNodeName
 	}
+	st.MQTT.Listen = defaultMQTTListen(*edmPath, st.MQTT.Listen, set["mqtt-listen"])
 	st.SetRunning(!*startStopped)
 
 	domainList, err := pattern.LoadDomains(*domains)
@@ -370,7 +385,7 @@ func runServe(argv []string) {
 		die("domains: %v", err)
 	}
 	beacon := pattern.NewBeacon(st)
-	snk, err := sink.Dial(*target, sink.Options{Timeout: 5 * time.Second, RetryInterval: 500 * time.Millisecond})
+	snk, err := sink.Dial(st.Target, sink.Options{Timeout: 5 * time.Second, RetryInterval: 500 * time.Millisecond})
 	if err != nil {
 		die("dial: %v", err)
 	}
@@ -391,16 +406,24 @@ func runServe(argv []string) {
 		die("web: %v", err)
 	}
 
-	if err := startMQTT(rootCtx, st); err != nil {
+	mqttBundle, err := startMQTT(rootCtx, st)
+	if err != nil {
 		die("mqtt: %v", err)
+	}
+	edmProc, err := startEDMIfRequested(rootCtx, *edmPath, st, mqttBundle)
+	if err != nil {
+		die("edm: %v", err)
+	}
+	if edmProc != nil {
+		defer edmProc.Stop()
 	}
 	startPprof(*pprofAddr)
 
 	prod := producer.New(st, domainList, beacon, snk, *workers)
 	go func() { _ = prod.Run(rootCtx) }()
 
-	scraper := verify.NewScraper(*metricsURL)
-	go func() { _ = scraper.Run(rootCtx, st, *reportInterval) }()
+	scraper := verify.NewScraper(st.MetricsURL)
+	go func() { _ = scraper.Run(rootCtx, st, st.ReportInterval) }()
 
 	fmt.Fprintf(os.Stderr, "edm-loadgen UI on http://%s/\n", *listen)
 	if err := srv.Run(rootCtx); err != nil && err != context.Canceled {
@@ -427,15 +450,15 @@ func startPprof(addr string) {
 // the keys directory has the cert material, opens the listener, and prints
 // the EDM-side flags the user must pass to wire EDM into our broker.
 //
-// The broker runs on its own goroutine until ctx is cancelled. Returns nil
-// when MQTT is disabled.
-func startMQTT(ctx context.Context, st *state.State) error {
+// The broker runs on its own goroutine until ctx is cancelled. Returns the
+// generated key bundle, or nil when MQTT is disabled.
+func startMQTT(ctx context.Context, st *state.State) (*pki.Bundle, error) {
 	if st.MQTT.Listen == "" {
-		return nil
+		return nil, nil
 	}
 	bundle, err := pki.Ensure(st.MQTT.KeysDir, []string{"127.0.0.1", "localhost"}, st.MQTT.NodeName)
 	if err != nil {
-		return fmt.Errorf("pki: %w", err)
+		return nil, fmt.Errorf("pki: %w", err)
 	}
 	// EDM derives its publish topic from the JWK kid:
 	//     events/up/<kid>/new_qname
@@ -452,9 +475,16 @@ func startMQTT(ctx context.Context, st *state.State) error {
 		Connections:    &st.Received.Connections,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	go func() { _ = br.Run(ctx) }()
+	errCh := make(chan error, 1)
+	go func() { errCh <- br.Run(ctx) }()
+
+	select {
+	case err := <-errCh:
+		return nil, err
+	case <-time.After(75 * time.Millisecond):
+	}
 
 	// EDM (current main as of 2026-04) does not accept --mqtt-topic /
 	// --mqtt-client-id / --mqtt-signing-key-id as CLI flags — it derives
@@ -478,7 +508,7 @@ Run EDM with these MQTT flags (drop --disable-mqtt):
 		bundle.ClientKey,
 		bundle.JWSKey,
 	)
-	return nil
+	return &bundle, nil
 }
 
 // mqttHost rewrites a bind-all address (":8883") into a connectable form

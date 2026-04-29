@@ -39,6 +39,21 @@ build from source. Both binaries on the same host means the load-gen's
 default `--target tcp://127.0.0.1:53535` and `--metrics-url
 http://127.0.0.1:2112/metrics` work as-is.
 
+For local dev, `run` and `serve` can launch EDM for you:
+
+```bash
+go run ./cmd/edm-loadgen serve --edm ../edm
+go run ./cmd/edm-loadgen serve --edm /tmp/dnstapir-edm-bin --qps 500
+```
+
+`--edm` accepts either an EDM source checkout (run via
+`go run ./cmd/dnstapir-edm run ...`) or an executable EDM binary. When EDM
+is launched this way, the embedded MQTT broker defaults to `:8883`; pass
+`--mqtt-listen=` to keep MQTT disabled. The old dev defaults are still
+available as environment overrides: `EDM_INPUT`, `EDM_CONFIG`, `EDM_DATA`,
+`EDM_LOG`, `EDM_WORKERS`, `KEYS_DIR`, `NODE_NAME`, `MQTT_LISTEN`, and
+`LOADGEN_LISTEN`.
+
 Three build steps. From a fresh shell:
 
 ```bash

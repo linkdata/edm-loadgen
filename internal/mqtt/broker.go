@@ -83,9 +83,9 @@ func New(opts Options) (*Broker, error) {
 	}
 
 	hook := &countingHook{
-		edmPrefix: opts.EDMTopicPrefix,
-		total:     coalesce(opts.Total),
-		edmTopic:  coalesce(opts.EDMTopic),
+		edmPrefix:   opts.EDMTopicPrefix,
+		total:       coalesce(opts.Total),
+		edmTopic:    coalesce(opts.EDMTopic),
 		connections: coalesce(opts.Connections),
 	}
 	if err := srv.AddHook(hook, nil); err != nil {
@@ -111,16 +111,22 @@ func (b *Broker) Run(ctx context.Context) error {
 		errCh <- b.srv.Serve()
 	}()
 	// Brief pause so listener startup errors surface fast.
+	serveReturned := false
 	select {
 	case err := <-errCh:
-		return fmt.Errorf("mqtt: serve: %w", err)
+		if err != nil {
+			return fmt.Errorf("mqtt: serve: %w", err)
+		}
+		serveReturned = true
 	case <-time.After(50 * time.Millisecond):
 	}
 
 	select {
 	case <-ctx.Done():
 		_ = b.srv.Close()
-		<-errCh
+		if !serveReturned {
+			<-errCh
+		}
 		return ctx.Err()
 	case err := <-errCh:
 		if err != nil {
