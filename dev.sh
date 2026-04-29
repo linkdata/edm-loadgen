@@ -127,6 +127,7 @@ setsid bash -c "
         --well-known-domains-file '$EDM_CONFIG/well-known-domains.dawg' \
         --minimiser-workers 0 \
         --disable-histogram-sender \
+        --disable-mqtt-filequeue \
         --mqtt-server 'tls://$MQTT_ENDPOINT' \
         --mqtt-keepalive 30 \
         --mqtt-ca-file '$KEYS_DIR/ca.crt' \
