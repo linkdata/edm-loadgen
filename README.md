@@ -140,23 +140,22 @@ To exercise the full publish path, the load-gen embeds a minimal MQTT broker
 (`internal/mqtt`) that EDM can connect to. The broker accepts any client cert
 on a self-signed TLS listener and counts received Publishes per topic.
 
-Start the load-gen with `--mqtt-listen` and it will:
+Start the load-gen with `--edm` and it will enable the embedded MQTT broker
+by default. If you are managing EDM yourself, start the load-gen with
+`--mqtt-listen` and pass the matching TLS/JWS files to EDM.
+
+The broker setup:
 
 1. Generate (or reuse) a CA + server cert + client cert + JWS key under
    `--mqtt-keys-dir` (default `./keys/`).
 2. Open the broker on the configured TLS port.
-3. Print the exact EDM flags to feed it.
+3. Log its connection details through the application logger.
 
 ```bash
-./edm-loadgen serve --listen :8090 --mqtt-listen :8883
-# edm-loadgen MQTT broker listening on tls://:8883
-# Run EDM with these MQTT flags (drop --disable-mqtt):
-#   --mqtt-server=tls://127.0.0.1:8883
-#   --mqtt-topic=events/up/edm-loadgen-1/edm
-#   ...
+./edm-loadgen serve --listen :8090 --edm ../edm
 ```
 
-Then restart EDM with those flags (drop `--disable-mqtt`):
+If launching EDM manually, drop `--disable-mqtt` and use the generated files:
 
 ```bash
 /tmp/dnstapir-edm-bin run \
@@ -166,9 +165,6 @@ Then restart EDM with those flags (drop `--disable-mqtt`):
     --well-known-domains-file /tmp/edm-config/well-known-domains.dawg \
     --disable-histogram-sender \
     --mqtt-server=tls://127.0.0.1:8883 \
-    --mqtt-topic=events/up/edm-loadgen-1/edm \
-    --mqtt-client-id=edm-loadgen-1-edm-pub \
-    --mqtt-signing-key-id=edm-loadgen-1 \
     --mqtt-ca-file=./keys/ca.crt \
     --mqtt-client-cert-file=./keys/client.crt \
     --mqtt-client-key-file=./keys/client.key \
@@ -196,6 +192,10 @@ xdg-open http://localhost:8090
 # Shipping-rate sanity check — send 100 frames and exit.
 ./edm-loadgen smoke --count 100
 
+# Run uncapped for 10s and print a JSON result. Timing starts when the
+# first dnstap frame is sent, so EDM/startup wait is excluded.
+./edm-loadgen benchmark --duration 10s
+
 # One-shot snapshot of EDM's /metrics, parsed into JSON.
 ./edm-loadgen verify
 ```
@@ -204,6 +204,7 @@ xdg-open http://localhost:8090
 
 | Command  | Purpose                                         |
 |----------|-------------------------------------------------|
+| `benchmark` | Run producer uncapped for a fixed duration   |
 | `smoke`  | Send N hand-crafted frames and exit             |
 | `run`    | Producer + verifier with a recurring text line  |
 | `serve`  | Producer + verifier + JaWS web UI               |

@@ -3,7 +3,9 @@ package producer
 import (
 	"context"
 	"net/netip"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	gdnstap "github.com/dnstap/golang-dnstap"
 	mdns "github.com/miekg/dns"
@@ -12,6 +14,33 @@ import (
 	"github.com/linkdata/edm-loadgen/internal/pattern"
 	"github.com/linkdata/edm-loadgen/internal/state"
 )
+
+type countingSender struct {
+	n int64
+}
+
+func (s *countingSender) SendBytes([]byte) error {
+	atomic.AddInt64(&s.n, 1)
+	return nil
+}
+
+func TestUnboundedProducerSendsWithoutQPS(t *testing.T) {
+	st := state.New()
+	atomic.StoreInt32(&st.QPS, 0)
+	st.SetRunning(true)
+	beacon := pattern.NewBeacon(st)
+	sender := new(countingSender)
+	prod := NewUnbounded(st, nil, beacon, sender, 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := prod.Run(ctx); err != context.DeadlineExceeded {
+		t.Fatalf("Run err=%v, want context deadline", err)
+	}
+	if got := atomic.LoadInt64(&sender.n); got == 0 {
+		t.Fatal("unbounded producer sent no frames")
+	}
+}
 
 func TestFrameBuilderGeneratedQueries(t *testing.T) {
 	st := state.New()

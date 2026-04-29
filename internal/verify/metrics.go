@@ -20,13 +20,13 @@ import (
 // Snapshot is a typed view of the EDM metrics we care about. Zero-valued
 // fields mean the metric was missing from the scrape.
 type Snapshot struct {
-	At                time.Time
-	Processed         int64
-	NewQname          int64
-	IgnoredTotal      int64
-	CryptopanHits     int64
-	CryptopanEvict    int64
-	SeenQnameEvict    int64
+	At             time.Time
+	Processed      int64
+	NewQname       int64
+	IgnoredTotal   int64
+	CryptopanHits  int64
+	CryptopanEvict int64
+	SeenQnameEvict int64
 }
 
 // Scraper polls a URL and writes parsed snapshots into a State.
@@ -112,6 +112,17 @@ func (s *Scraper) Once(ctx context.Context) (Snapshot, error) {
 	return snap, nil
 }
 
+// Update performs one scrape and applies it to st relative to the scraper's
+// current baseline.
+func (s *Scraper) Update(ctx context.Context, st *state.State) error {
+	snap, err := s.Once(ctx)
+	if err != nil {
+		return err
+	}
+	s.apply(st, snap)
+	return nil
+}
+
 // Run polls every interval (or state.ReportInterval if interval is zero) and
 // writes the parsed snapshot back into st.Observed atomically. Returns when
 // ctx is cancelled.
@@ -128,9 +139,7 @@ func (s *Scraper) Run(ctx context.Context, st *state.State, interval time.Durati
 	defer t.Stop()
 
 	// Do an initial scrape immediately so the UI has data on first paint.
-	if snap, err := s.Once(ctx); err == nil {
-		s.apply(st, snap)
-	}
+	_ = s.Update(ctx, st)
 
 	for {
 		select {

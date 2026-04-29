@@ -12,8 +12,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
+	"math"
 	"net/http"
 	_ "net/http/pprof" //nolint:gosec // attached to a non-default mux only when --pprof is set
 	"net/netip"
@@ -37,9 +40,12 @@ import (
 	"github.com/linkdata/edm-loadgen/internal/web"
 )
 
+var appLog = slog.New(slog.NewTextHandler(os.Stderr, nil))
+
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: edm-loadgen <subcommand> [flags]")
 	fmt.Fprintln(os.Stderr, "subcommands:")
+	fmt.Fprintln(os.Stderr, "  benchmark  run producer at unlimited speed for a fixed duration")
 	fmt.Fprintln(os.Stderr, "  smoke   send N hand-crafted frames and exit")
 	fmt.Fprintln(os.Stderr, "  run     start producer + verifier with text status")
 	fmt.Fprintln(os.Stderr, "  serve   producer + verifier + JaWS web UI")
@@ -52,6 +58,8 @@ func main() {
 		os.Exit(2)
 	}
 	switch os.Args[1] {
+	case "benchmark":
+		runBenchmark(os.Args[2:])
 	case "smoke":
 		runSmoke(os.Args[2:])
 	case "run":
@@ -218,18 +226,18 @@ func runHeadless(argv []string) {
 		cancel()
 	}()
 
-	mqttBundle, err := startMQTT(rootCtx, st)
+	mqttBundle, err := startMQTT(rootCtx, appLog, st)
 	if err != nil {
 		die("mqtt: %v", err)
 	}
-	edmProc, err := startEDMIfRequested(rootCtx, *edmPath, st, mqttBundle)
+	edmProc, err := startEDMIfRequested(rootCtx, appLog, *edmPath, st, mqttBundle)
 	if err != nil {
 		die("edm: %v", err)
 	}
 	if edmProc != nil {
 		defer edmProc.Stop()
 	}
-	startPprof(*pprofAddr)
+	startPprof(appLog, *pprofAddr)
 
 	runCtx := rootCtx
 	if *duration > 0 {
@@ -245,6 +253,258 @@ func runHeadless(argv []string) {
 	go func() { _ = scraper.Run(runCtx, st, st.ReportInterval) }()
 
 	statusLoop(runCtx, st)
+}
+
+type benchmarkResult struct {
+	DurationSeconds       float64          `json:"duration_seconds"`
+	FirstFrameWaitSeconds float64          `json:"first_frame_wait_seconds"`
+	SentTotal             int64            `json:"sent_total"`
+	FramesPerSecond       int64            `json:"frames_per_second"`
+	EDMProcessed          int64            `json:"edm_processed"`
+	EDMNewQname           int64            `json:"edm_new_qname"`
+	EDMIgnoredTotal       int64            `json:"edm_ignored_total"`
+	Drift                 int64            `json:"drift"`
+	MQTTReceived          int64            `json:"mqtt_received"`
+	MQTTEDMTopic          int64            `json:"mqtt_edm_topic"`
+	PerPattern            map[string]int64 `json:"per_pattern"`
+	InterruptedEarly      bool             `json:"interrupted_early"`
+}
+
+func runBenchmark(argv []string) {
+	fs := flag.NewFlagSet("benchmark", flag.ExitOnError)
+	defaultTarget := defaultTarget()
+	target := fs.String("target", defaultTarget, "EDM Frame Streams socket")
+	metricsURL := fs.String("metrics-url", defaultMetricsURL(defaultTarget), "EDM metrics URL")
+	workers := fs.Int("workers", 0, "number of parallel builder goroutines (0 = GOMAXPROCS)")
+	pprofAddr := fs.String("pprof", "", "if set, serve net/http/pprof at this address (e.g. :6061)")
+	duration := fs.Duration("duration", 10*time.Second, "benchmark duration")
+	domains := fs.String("well-known-source", "", "CSV/text top-domains list")
+	configPath := fs.String("config", "", "JSON config file (overlaid before flags)")
+	edmPath := fs.String("edm", "", "optional EDM binary or source checkout to launch alongside the load generator")
+	mixBg := fs.Int("mix.background", 80, "")
+	mixWk := fs.Int("mix.wellknown", 0, "")
+	mixDga := fs.Int("mix.dga", 5, "")
+	mixBeacon := fs.Int("mix.beacon", 2, "")
+	mixFf := fs.Int("mix.fastflux", 1, "")
+	mixDd := fs.Int("mix.dyndns", 2, "")
+	mixExfil := fs.Int("mix.exfil", 5, "")
+	mixExotic := fs.Int("mix.exotic", 3, "")
+	mixEva := fs.Int("mix.evasion", 2, "")
+	mqttListen := fs.String("mqtt-listen", "", `enable embedded MQTT broker on this address (e.g. ":8883"); empty = off`)
+	mqttKeysDir := fs.String("mqtt-keys-dir", envOr("KEYS_DIR", "./keys"), "directory for the MQTT broker's TLS material (auto-generated on first use)")
+	mqttNodeName := fs.String("mqtt-node-name", envOr("NODE_NAME", "edm-loadgen-1"), "EDM node name; topic prefix and client-id stem")
+	if err := fs.Parse(argv); err != nil {
+		os.Exit(2)
+	}
+	if *duration <= 0 {
+		die("benchmark: --duration must be greater than 0")
+	}
+
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+
+	st := state.New()
+	if *configPath != "" {
+		cfg, err := state.LoadConfigFile(*configPath)
+		if err != nil {
+			die("%v", err)
+		}
+		if err := cfg.Apply(st); err != nil {
+			die("%v", err)
+		}
+	}
+	if set["target"] || *configPath == "" {
+		st.Target = *target
+	}
+	if set["metrics-url"] || *configPath == "" {
+		st.MetricsURL = *metricsURL
+	}
+	overlayMix(st, fs, set, *configPath == "",
+		mixBg, mixWk, mixDga, mixBeacon, mixFf, mixDd, mixExfil, mixExotic, mixEva)
+	if set["mqtt-listen"] || *configPath == "" {
+		st.MQTT.Listen = *mqttListen
+	}
+	if set["mqtt-keys-dir"] || *configPath == "" {
+		st.MQTT.KeysDir = *mqttKeysDir
+	}
+	if set["mqtt-node-name"] || *configPath == "" {
+		st.MQTT.NodeName = *mqttNodeName
+	}
+	st.MQTT.Listen = defaultMQTTListen(*edmPath, st.MQTT.Listen, set["mqtt-listen"])
+	st.SetRunning(true)
+
+	domainList, err := pattern.LoadDomains(*domains)
+	if err != nil {
+		die("domains: %v", err)
+	}
+	beacon := pattern.NewBeacon(st)
+	snk, err := sink.Dial(st.Target, sink.Options{Timeout: 5 * time.Second, RetryInterval: 500 * time.Millisecond})
+	if err != nil {
+		die("dial: %v", err)
+	}
+	defer snk.Close()
+
+	rootCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	go func() {
+		<-sigCh
+		cancel()
+	}()
+
+	mqttBundle, err := startMQTT(rootCtx, appLog, st)
+	if err != nil {
+		die("mqtt: %v", err)
+	}
+	edmProc, err := startEDMIfRequested(rootCtx, appLog, *edmPath, st, mqttBundle)
+	if err != nil {
+		die("edm: %v", err)
+	}
+	if edmProc != nil {
+		defer edmProc.Stop()
+	}
+	startPprof(appLog, *pprofAddr)
+
+	scraper := verify.NewScraper(st.MetricsURL)
+	_ = scraper.Update(rootCtx, st)
+
+	runCtx, stopRun := context.WithCancel(rootCtx)
+	defer stopRun()
+	prod := producer.NewUnbounded(st, domainList, beacon, snk, *workers)
+	producerStarted := time.Now()
+	prodDone := make(chan error, 1)
+	go func() { prodDone <- prod.Run(runCtx) }()
+
+	start, err := waitForFirstBenchmarkFrame(rootCtx, st, prodDone)
+	if err != nil {
+		stopRun()
+		select {
+		case <-prodDone:
+		default:
+		}
+		die("benchmark: %v", err)
+	}
+	firstFrameWait := start.Sub(producerStarted)
+	appLog.Info("benchmark timing started", "sent_total", atomic.LoadInt64(&st.Sent.Total))
+	progressDone := make(chan struct{})
+	go logBenchmarkProgress(runCtx, st, start, progressDone)
+	defer func() {
+		if progressDone != nil {
+			stopRun()
+			<-progressDone
+		}
+	}()
+
+	timer := time.NewTimer(*duration)
+	defer timer.Stop()
+	interruptedEarly := false
+	prodStopped := false
+	var prodErr error
+	select {
+	case <-timer.C:
+	case <-rootCtx.Done():
+		interruptedEarly = true
+	case prodErr = <-prodDone:
+		prodStopped = true
+		interruptedEarly = true
+	}
+	end := time.Now()
+	if !prodStopped {
+		stopRun()
+		prodErr = <-prodDone
+	}
+	if prodStopped && prodErr != nil && rootCtx.Err() == nil {
+		die("benchmark: producer stopped early: %v", prodErr)
+	}
+	if prodErr != nil && !errors.Is(prodErr, context.Canceled) && !errors.Is(prodErr, context.DeadlineExceeded) {
+		die("benchmark: producer: %v", prodErr)
+	}
+	elapsed := end.Sub(start)
+	if elapsed <= 0 {
+		elapsed = time.Nanosecond
+	}
+	stopRun()
+	<-progressDone
+	progressDone = nil
+	_ = scraper.Update(context.Background(), st)
+
+	rep := verify.Reconcile(st)
+	result := benchmarkResult{
+		DurationSeconds:       elapsed.Seconds(),
+		FirstFrameWaitSeconds: firstFrameWait.Seconds(),
+		SentTotal:             rep.SentTotal,
+		FramesPerSecond:       roundRate(rep.SentTotal, elapsed),
+		EDMProcessed:          rep.EDMProcessed,
+		EDMNewQname:           rep.EDMNewQname,
+		EDMIgnoredTotal:       rep.EDMIgnoredTotal,
+		Drift:                 rep.Drift,
+		MQTTReceived:          atomic.LoadInt64(&st.Received.Total),
+		MQTTEDMTopic:          atomic.LoadInt64(&st.Received.EDMTopic),
+		PerPattern:            rep.PerPattern,
+		InterruptedEarly:      interruptedEarly,
+	}
+	out, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		die("benchmark: marshal result: %v", err)
+	}
+	fmt.Println(string(out))
+}
+
+func logBenchmarkProgress(ctx context.Context, st *state.State, start time.Time, done chan<- struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	var prevTotal int64
+	prevAt := start
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			total := atomic.LoadInt64(&st.Sent.Total)
+			delta := total - prevTotal
+			elapsed := now.Sub(prevAt)
+			appLog.Info("benchmark progress",
+				"elapsed", now.Sub(start).Round(time.Millisecond).String(),
+				"sent_total", total,
+				"frames_per_second", roundRate(delta, elapsed),
+			)
+			prevTotal = total
+			prevAt = now
+		}
+	}
+}
+
+func roundRate(n int64, d time.Duration) int64 {
+	if d <= 0 {
+		return 0
+	}
+	return int64(math.Round(float64(n) / d.Seconds()))
+}
+
+func waitForFirstBenchmarkFrame(ctx context.Context, st *state.State, prodDone <-chan error) (time.Time, error) {
+	if atomic.LoadInt64(&st.Sent.Total) > 0 {
+		return time.Now(), nil
+	}
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-prodDone:
+			if err == nil {
+				err = errors.New("producer exited")
+			}
+			return time.Time{}, fmt.Errorf("producer stopped before first frame: %w", err)
+		case <-ctx.Done():
+			return time.Time{}, ctx.Err()
+		case now := <-ticker.C:
+			if atomic.LoadInt64(&st.Sent.Total) > 0 {
+				return now, nil
+			}
+		}
+	}
 }
 
 // statusLoop prints a recurring summary line every report-interval until ctx
@@ -406,18 +666,18 @@ func runServe(argv []string) {
 		die("web: %v", err)
 	}
 
-	mqttBundle, err := startMQTT(rootCtx, st)
+	mqttBundle, err := startMQTT(rootCtx, appLog, st)
 	if err != nil {
 		die("mqtt: %v", err)
 	}
-	edmProc, err := startEDMIfRequested(rootCtx, *edmPath, st, mqttBundle)
+	edmProc, err := startEDMIfRequested(rootCtx, appLog, *edmPath, st, mqttBundle)
 	if err != nil {
 		die("edm: %v", err)
 	}
 	if edmProc != nil {
 		defer edmProc.Stop()
 	}
-	startPprof(*pprofAddr)
+	startPprof(appLog, *pprofAddr)
 
 	prod := producer.New(st, domainList, beacon, snk, *workers)
 	go func() { _ = prod.Run(rootCtx) }()
@@ -425,7 +685,7 @@ func runServe(argv []string) {
 	scraper := verify.NewScraper(st.MetricsURL)
 	go func() { _ = scraper.Run(rootCtx, st, st.ReportInterval) }()
 
-	fmt.Fprintf(os.Stderr, "edm-loadgen UI on http://%s/\n", *listen)
+	appLog.Info("edm-loadgen UI listening", "url", "http://"+*listen+"/")
 	if err := srv.Run(rootCtx); err != nil && err != context.Canceled {
 		die("serve: %v", err)
 	}
@@ -435,7 +695,7 @@ func runServe(argv []string) {
 // pprof package registers its handlers on http.DefaultServeMux at import
 // time; we only need to put a listener in front of it. No-op when addr is
 // empty.
-func startPprof(addr string) {
+func startPprof(log *slog.Logger, addr string) {
 	if addr == "" {
 		return
 	}
@@ -443,7 +703,7 @@ func startPprof(addr string) {
 		// Best-effort: a port collision here just means no profiling.
 		_ = http.ListenAndServe(addr, nil) //nolint:gosec // dev tooling only
 	}()
-	fmt.Fprintf(os.Stderr, "edm-loadgen pprof on http://%s/debug/pprof/\n", addr)
+	log.Info("pprof listening", "url", "http://"+addr+"/debug/pprof/")
 }
 
 // startMQTT starts the embedded broker if st.MQTT.Listen is set. It ensures
@@ -452,7 +712,7 @@ func startPprof(addr string) {
 //
 // The broker runs on its own goroutine until ctx is cancelled. Returns the
 // generated key bundle, or nil when MQTT is disabled.
-func startMQTT(ctx context.Context, st *state.State) (*pki.Bundle, error) {
+func startMQTT(ctx context.Context, log *slog.Logger, st *state.State) (*pki.Bundle, error) {
 	if st.MQTT.Listen == "" {
 		return nil, nil
 	}
@@ -486,27 +746,14 @@ func startMQTT(ctx context.Context, st *state.State) (*pki.Bundle, error) {
 	case <-time.After(75 * time.Millisecond):
 	}
 
-	// EDM (current main as of 2026-04) does not accept --mqtt-topic /
-	// --mqtt-client-id / --mqtt-signing-key-id as CLI flags — it derives
-	// both the topic and client id from the JWK kid. We just need to feed
-	// it server / ca / client-cert / client-key / signing-key paths.
-	fmt.Fprintf(os.Stderr,
-		`edm-loadgen MQTT broker listening on tls://%s (will receive at events/up/%s/new_qname)
-Run EDM with these MQTT flags (drop --disable-mqtt):
-  --mqtt-server=tls://%s
-  --mqtt-keepalive=30
-  --mqtt-ca-file=%s
-  --mqtt-client-cert-file=%s
-  --mqtt-client-key-file=%s
-  --mqtt-signing-key-file=%s
-`,
-		st.MQTT.Listen,
-		st.MQTT.NodeName,
-		mqttHost(st.MQTT.Listen),
-		bundle.CACert,
-		bundle.ClientCert,
-		bundle.ClientKey,
-		bundle.JWSKey,
+	log.Info("MQTT broker listening",
+		"listen", st.MQTT.Listen,
+		"server", "tls://"+mqttHost(st.MQTT.Listen),
+		"topic_prefix", "events/up/"+st.MQTT.NodeName+"/",
+		"ca_file", bundle.CACert,
+		"client_cert_file", bundle.ClientCert,
+		"client_key_file", bundle.ClientKey,
+		"signing_key_file", bundle.JWSKey,
 	)
 	return &bundle, nil
 }
@@ -522,6 +769,6 @@ func mqttHost(listen string) string {
 }
 
 func die(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
+	appLog.Error(fmt.Sprintf(format, args...))
 	os.Exit(1)
 }

@@ -4,10 +4,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/linkdata/edm-loadgen/internal/pki"
+	"github.com/linkdata/edm-loadgen/internal/state"
 )
 
 func TestDefaultMQTTListen(t *testing.T) {
@@ -71,6 +74,35 @@ func TestDefaultMetricsURL(t *testing.T) {
 	t.Setenv("EDM_METRICS_URL", "http://127.0.0.1:12112/metrics")
 	if got := defaultMetricsURL("tcp://192.0.2.10:53535"); got != "http://127.0.0.1:12112/metrics" {
 		t.Fatalf("defaultMetricsURL()=%q, want env override", got)
+	}
+}
+
+func TestDefaultEDMWorkersUsesGOMAXPROCS(t *testing.T) {
+	old := runtime.GOMAXPROCS(2)
+	t.Cleanup(func() { runtime.GOMAXPROCS(old) })
+	if got := defaultEDMWorkers(); got != "2" {
+		t.Fatalf("defaultEDMWorkers()=%q, want GOMAXPROCS", got)
+	}
+}
+
+func TestEDMOptionsFromEnvDefaultsWorkers(t *testing.T) {
+	t.Setenv("EDM_WORKERS", "")
+	st := state.New()
+	opts, err := edmOptionsFromEnv("../edm", st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := opts.Workers, strconv.Itoa(runtime.GOMAXPROCS(0)); got != want {
+		t.Fatalf("Workers=%q, want %q", got, want)
+	}
+
+	t.Setenv("EDM_WORKERS", "7")
+	opts, err = edmOptionsFromEnv("../edm", st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Workers != "7" {
+		t.Fatalf("Workers=%q, want env override", opts.Workers)
 	}
 }
 
@@ -141,6 +173,18 @@ func TestBuildEDMCommandSpec(t *testing.T) {
 	}
 	if !reflect.DeepEqual(bin.Args, args) {
 		t.Fatalf("binary args=%v, want %v", bin.Args, args)
+	}
+}
+
+func TestFormatCommand(t *testing.T) {
+	spec := edmCommandSpec{
+		Name: "go",
+		Args: []string{"run", "./cmd/dnstapir-edm", "run", "--config-file", "/tmp/edm config/edm.toml", "it's-ok"},
+	}
+	got := formatCommand(spec)
+	want := "go run ./cmd/dnstapir-edm run --config-file '/tmp/edm config/edm.toml' 'it'\\''s-ok'"
+	if got != want {
+		t.Fatalf("formatCommand()=%q, want %q", got, want)
 	}
 }
 
@@ -218,6 +262,18 @@ func TestBuildEDMArgs(t *testing.T) {
 			t.Fatalf("MQTT-enabled args unexpectedly contain --disable-mqtt: %v", got)
 		}
 	}
+}
+
+func TestBuildEDMArgsDefaultsWorkers(t *testing.T) {
+	got, err := buildEDMArgs(edmOptions{
+		Target:    "tcp://127.0.0.1:53535",
+		ConfigDir: "/tmp/edm-config",
+		DataDir:   "/tmp/edm-data",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContainArgs(t, got, "--minimiser-workers", defaultEDMWorkers())
 }
 
 func mustContainArgs(t *testing.T, got []string, want ...string) {

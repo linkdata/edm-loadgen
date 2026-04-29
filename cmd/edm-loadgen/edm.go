@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -67,6 +68,7 @@ type edmOptions struct {
 type edmProcess struct {
 	pid     int
 	logPath string
+	log     *slog.Logger
 	done    chan error
 	stop    sync.Once
 }
@@ -107,7 +109,7 @@ func defaultMetricsURL(target string) string {
 	return "http://" + host + ":2112/metrics"
 }
 
-func startEDMIfRequested(ctx context.Context, edmPath string, st *state.State, mqttBundle *pki.Bundle) (*edmProcess, error) {
+func startEDMIfRequested(ctx context.Context, log *slog.Logger, edmPath string, st *state.State, mqttBundle *pki.Bundle) (*edmProcess, error) {
 	if edmPath == "" {
 		return nil, nil
 	}
@@ -115,7 +117,7 @@ func startEDMIfRequested(ctx context.Context, edmPath string, st *state.State, m
 	if err != nil {
 		return nil, err
 	}
-	return startEDM(ctx, opts)
+	return startEDM(ctx, log, opts)
 }
 
 func edmOptionsFromEnv(edmPath string, st *state.State, mqttBundle *pki.Bundle) (edmOptions, error) {
@@ -140,7 +142,7 @@ func edmOptionsFromEnv(edmPath string, st *state.State, mqttBundle *pki.Bundle) 
 		ConfigDir:    envOr("EDM_CONFIG", defaultEDMConfigDir),
 		DataDir:      envOr("EDM_DATA", defaultEDMDataDir),
 		LogPath:      envOr("EDM_LOG", defaultEDMLog),
-		Workers:      envOr("EDM_WORKERS", strconv.Itoa(runtime.NumCPU())),
+		Workers:      envOr("EDM_WORKERS", defaultEDMWorkers()),
 		Stabilise:    stabilise,
 		ReadyTimeout: ready,
 		MQTTListen:   mqttListen,
@@ -153,6 +155,14 @@ func envOr(name, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func defaultEDMWorkers() string {
+	n := runtime.GOMAXPROCS(0)
+	if n < 1 {
+		n = 1
+	}
+	return strconv.Itoa(n)
 }
 
 func envSeconds(name string, fallback int) (time.Duration, error) {
@@ -206,13 +216,17 @@ func buildEDMArgs(opts edmOptions) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	workers := opts.Workers
+	if workers == "" {
+		workers = defaultEDMWorkers()
+	}
 	args := []string{
 		"run",
 		input[0], input[1],
 		"--data-dir", opts.DataDir,
 		"--config-file", filepath.Join(opts.ConfigDir, "edm.toml"),
 		"--well-known-domains-file", filepath.Join(opts.ConfigDir, "well-known-domains.dawg"),
-		"--minimiser-workers", opts.Workers,
+		"--minimiser-workers", workers,
 		"--disable-histogram-sender",
 	}
 	if opts.MQTTListen != "" && opts.MQTTBundle != nil {
@@ -246,12 +260,12 @@ func edmInputArgs(target string) ([]string, error) {
 	}
 }
 
-func startEDM(ctx context.Context, opts edmOptions) (*edmProcess, error) {
+func startEDM(ctx context.Context, log *slog.Logger, opts edmOptions) (*edmProcess, error) {
 	target, err := classifyEDMPath(opts.Path)
 	if err != nil {
 		return nil, err
 	}
-	if err := bootstrapEDMFiles(opts); err != nil {
+	if err := bootstrapEDMFiles(log, opts); err != nil {
 		return nil, err
 	}
 	args, err := buildEDMArgs(opts)
@@ -276,7 +290,7 @@ func startEDM(ctx context.Context, opts edmOptions) (*edmProcess, error) {
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	fmt.Fprintf(os.Stderr, "edm-loadgen: starting EDM (logs -> %s)\n", opts.LogPath)
+	log.Info("starting EDM", "command", formatCommand(spec), "work_dir", spec.Dir, "log_path", opts.LogPath)
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		return nil, fmt.Errorf("start %s: %w", spec.Name, err)
@@ -284,6 +298,7 @@ func startEDM(ctx context.Context, opts edmOptions) (*edmProcess, error) {
 	proc := &edmProcess{
 		pid:     cmd.Process.Pid,
 		logPath: opts.LogPath,
+		log:     log,
 		done:    make(chan error, 1),
 	}
 	go func() {
@@ -291,14 +306,38 @@ func startEDM(ctx context.Context, opts edmOptions) (*edmProcess, error) {
 		close(proc.done)
 		_ = logFile.Close()
 	}()
-	if err := waitForEDMReady(ctx, proc, opts); err != nil {
+	if err := waitForEDMReady(ctx, log, proc, opts); err != nil {
 		proc.Stop()
 		return nil, err
 	}
 	return proc, nil
 }
 
-func bootstrapEDMFiles(opts edmOptions) error {
+func formatCommand(spec edmCommandSpec) string {
+	parts := make([]string, 0, 1+len(spec.Args))
+	parts = append(parts, shellQuote(spec.Name))
+	for _, arg := range spec.Args {
+		parts = append(parts, shellQuote(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if strings.IndexFunc(s, func(r rune) bool {
+		return !(r == '_' || r == '-' || r == '.' || r == '/' || r == ':' || r == '=' ||
+			(r >= '0' && r <= '9') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= 'a' && r <= 'z'))
+	}) == -1 {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func bootstrapEDMFiles(log *slog.Logger, opts edmOptions) error {
 	if err := os.MkdirAll(opts.ConfigDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir EDM config dir: %w", err)
 	}
@@ -315,12 +354,12 @@ func bootstrapEDMFiles(opts edmOptions) error {
 		if err := os.WriteFile(configPath, body, 0o644); err != nil {
 			return fmt.Errorf("write EDM config %s: %w", configPath, err)
 		}
-		fmt.Fprintf(os.Stderr, "edm-loadgen: copied edm.toml to %s\n", configPath)
+		log.Info("copied EDM config", "path", configPath)
 	}
 
 	dawgPath := filepath.Join(opts.ConfigDir, "well-known-domains.dawg")
 	if !regularFileExists(dawgPath) {
-		if err := fetchWellKnownDomains(dawgPath); err != nil {
+		if err := fetchWellKnownDomains(log, dawgPath); err != nil {
 			return err
 		}
 	}
@@ -343,8 +382,8 @@ func findBundledEDMConfig() (string, error) {
 	return "", errors.New("missing bundled configs/edm.toml")
 }
 
-func fetchWellKnownDomains(path string) error {
-	fmt.Fprintf(os.Stderr, "edm-loadgen: fetching well-known-domains.dawg from upstream EDM...\n")
+func fetchWellKnownDomains(log *slog.Logger, path string) error {
+	log.Info("fetching well-known-domains.dawg", "url", defaultWellKnownURL, "path", path)
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get(defaultWellKnownURL)
 	if err != nil {
@@ -374,7 +413,7 @@ func regularFileExists(path string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
-func waitForEDMReady(ctx context.Context, proc *edmProcess, opts edmOptions) error {
+func waitForEDMReady(ctx context.Context, log *slog.Logger, proc *edmProcess, opts edmOptions) error {
 	if opts.Stabilise > 0 {
 		deadline := time.Now().Add(opts.Stabilise)
 		tick := time.NewTicker(500 * time.Millisecond)
@@ -397,7 +436,7 @@ func waitForEDMReady(ctx context.Context, proc *edmProcess, opts edmOptions) err
 			return edmExitedError("waiting for /metrics", err, proc.logPath)
 		}
 		if metricsReady(ctx, client, opts.MetricsURL) {
-			fmt.Fprintf(os.Stderr, "edm-loadgen: EDM ready at %s\n", opts.MetricsURL)
+			log.Info("EDM ready", "metrics_url", opts.MetricsURL)
 			return nil
 		}
 		if opts.ReadyTimeout == 0 || time.Now().After(deadline) {
@@ -448,12 +487,12 @@ func (p *edmProcess) Stop() {
 		return
 	}
 	p.stop.Do(func() {
-		fmt.Fprintf(os.Stderr, "edm-loadgen: stopping EDM (pgid %d)\n", p.pid)
+		p.log.Info("stopping EDM", "pgid", p.pid)
 		_ = syscall.Kill(-p.pid, syscall.SIGTERM)
 		select {
 		case <-p.done:
 		case <-time.After(10 * time.Second):
-			fmt.Fprintf(os.Stderr, "edm-loadgen: EDM did not exit within 10s, sending SIGKILL\n")
+			p.log.Warn("EDM did not exit within timeout; sending SIGKILL", "pgid", p.pid, "timeout", 10*time.Second)
 			_ = syscall.Kill(-p.pid, syscall.SIGKILL)
 			<-p.done
 		}

@@ -46,6 +46,7 @@ type Producer struct {
 	bucket  *rate.Bucket
 	workers int
 	frames  *frameBufferPool
+	unbound bool
 }
 
 type byteSender interface {
@@ -106,10 +107,22 @@ func New(st *state.State, domains []string, beacon *pattern.Beacon, snk byteSend
 	}
 }
 
+// NewUnbounded constructs a Producer whose workers build/send as fast as the
+// sink and CPU allow. Used by the benchmark CLI mode.
+func NewUnbounded(st *state.State, domains []string, beacon *pattern.Beacon, snk byteSender, workers int) *Producer {
+	p := New(st, domains, beacon, snk, workers)
+	p.bucket.Close()
+	p.bucket = nil
+	p.unbound = true
+	return p
+}
+
 // Run starts the worker / sender / beacon / publish-rate goroutines and
 // blocks until ctx is cancelled.
 func (p *Producer) Run(ctx context.Context) error {
-	defer p.bucket.Close()
+	if !p.unbound {
+		defer p.bucket.Close()
+	}
 
 	// The send channel decouples the CPU-bound build path from the I/O-
 	// bound sender. Capacity scales with worker count so a momentary slow
@@ -119,7 +132,9 @@ func (p *Producer) Run(ctx context.Context) error {
 	bgCtx, cancelBg := context.WithCancel(ctx)
 	defer cancelBg()
 	go p.runBeacon(bgCtx, queue)
-	go p.publishRate(bgCtx)
+	if !p.unbound {
+		go p.publishRate(bgCtx)
+	}
 
 	// Spin up N builders, each with its own Mixer (and thus its own pattern
 	// instances and private RNG state).
@@ -162,11 +177,14 @@ func (p *Producer) Run(ctx context.Context) error {
 // from the shared bucket, pushing envelopes onto the shared queue.
 func (p *Producer) buildLoop(ctx context.Context, mixer *mix.Mixer, queue chan<- sendItem) {
 	var builder frameBuilder
-	for p.bucket.Wait() {
+	for p.wait(ctx) {
 		if ctx.Err() != nil {
 			return
 		}
 		if !p.st.IsRunning() {
+			if p.unbound {
+				time.Sleep(10 * time.Millisecond)
+			}
 			continue
 		}
 		gen := mixer.Pick()
@@ -193,6 +211,13 @@ func (p *Producer) buildLoop(ctx context.Context, mixer *mix.Mixer, queue chan<-
 			return
 		}
 	}
+}
+
+func (p *Producer) wait(ctx context.Context) bool {
+	if !p.unbound {
+		return p.bucket.Wait()
+	}
+	return ctx.Err() == nil
 }
 
 // runBeacon emits beacon queries on its own time-driven cadence, independent
