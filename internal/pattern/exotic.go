@@ -43,18 +43,18 @@ func (e *Exotic) Next(ctx context.Context) (q Query, err error) {
 	qname := domains[e.rng.IntN(len(domains))]
 
 	e.st.RLock()
-	rtypes := append([]string(nil), e.st.Exotic.RecordTypes...)
+	chosen := "TXT"
+	if len(e.st.Exotic.RecordTypes) > 0 {
+		chosen = e.st.Exotic.RecordTypes[e.rng.IntN(len(e.st.Exotic.RecordTypes))]
+	}
 	lo, hi := e.st.Exotic.PayloadBytesMin, e.st.Exotic.PayloadBytesMax
 	e.st.RUnlock()
-	if len(rtypes) == 0 {
-		rtypes = []string{"TXT"}
-	}
 	if hi <= lo {
 		hi = lo + 1
 	}
 	size := lo + e.rng.IntN(hi-lo)
 
-	chosen := strings.ToUpper(rtypes[e.rng.IntN(len(rtypes))])
+	chosen = strings.ToUpper(chosen)
 	var qt uint16
 	var ans []mdns.RR
 	hdr := mdns.RR_Header{Name: mdns.Fqdn(qname), Class: mdns.ClassINET, Ttl: 60}

@@ -6,9 +6,9 @@ import (
 	"context"
 	"encoding/base32"
 	"encoding/hex"
-	"fmt"
 	"math/rand/v2"
 	"net/netip"
+	"strconv"
 
 	mdns "github.com/miekg/dns"
 
@@ -34,6 +34,11 @@ type Exfil struct {
 	cursor    int
 	chunkSize int
 	seq       uint32
+
+	gzipBuf    bytes.Buffer
+	gzipWriter *gzip.Writer
+	encodeBuf  []byte
+	b32Buf     []byte
 }
 
 // NewExfil returns a generator. Session payload is generated lazily.
@@ -76,9 +81,9 @@ func (e *Exfil) Next(ctx context.Context) (q Query, err error) {
 	var label string
 	switch tool {
 	case "iodine":
-		label = iodineLabel(e.seq, chunk)
+		label = e.iodineLabel(e.seq, chunk)
 	case "raw-b32":
-		label = strictB32(chunk)
+		label = e.strictB32(chunk)
 	default: // dnscat2
 		label = hex.EncodeToString(chunk)
 	}
@@ -88,13 +93,13 @@ func (e *Exfil) Next(ctx context.Context) (q Query, err error) {
 	qname := label + "." + domain
 
 	q = Query{
-		QName:   qname,
-		QType:   mdns.TypeTXT, // exfil tools commonly use TXT for response payload
-		SrcIP:   e.src,
-		DstIP:   resolverIP,
+		QName: qname,
+		QType: mdns.TypeTXT, // exfil tools commonly use TXT for response payload
+		SrcIP: e.src,
+		DstIP: resolverIP,
 		Answers: []mdns.RR{&mdns.TXT{
 			Hdr: mdns.RR_Header{Name: mdns.Fqdn(qname), Class: mdns.ClassINET, Ttl: 0, Rrtype: mdns.TypeTXT},
-			Txt: []string{fmt.Sprintf("ack=%d", e.seq)},
+			Txt: []string{"ack=" + strconv.FormatUint(uint64(e.seq), 10)},
 		}},
 		At: nowFunc(),
 	}
@@ -121,28 +126,49 @@ func (e *Exfil) makePayload(n int) []byte {
 // gzip+base32 of the chunk. Real iodine framing is more elaborate; this
 // captures the user-visible shape (base32 alphabet + sequence in header).
 func iodineLabel(seq uint32, chunk []byte) string {
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	_, _ = gz.Write(chunk)
-	_ = gz.Close()
-	hdr := []byte{byte(seq >> 24), byte(seq >> 16), byte(seq >> 8), byte(seq)}
-	body := append(hdr, buf.Bytes()...)
-	return strictB32(body)
+	var e Exfil
+	return e.iodineLabel(seq, chunk)
 }
+
+func (e *Exfil) iodineLabel(seq uint32, chunk []byte) string {
+	e.gzipBuf.Reset()
+	if e.gzipWriter == nil {
+		e.gzipWriter = gzip.NewWriter(&e.gzipBuf)
+	} else {
+		e.gzipWriter.Reset(&e.gzipBuf)
+	}
+	_, _ = e.gzipWriter.Write(chunk)
+	_ = e.gzipWriter.Close()
+	hdr := []byte{byte(seq >> 24), byte(seq >> 16), byte(seq >> 8), byte(seq)}
+	e.encodeBuf = append(e.encodeBuf[:0], hdr...)
+	e.encodeBuf = append(e.encodeBuf, e.gzipBuf.Bytes()...)
+	return e.strictB32(e.encodeBuf)
+}
+
+var strictB32Encoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
 // strictB32 returns a lowercase base32 string with no padding, since DNS
 // labels do not allow '='.
 func strictB32(p []byte) string {
-	enc := base32.StdEncoding.WithPadding(base32.NoPadding)
-	out := enc.EncodeToString(p)
+	var e Exfil
+	return e.strictB32(p)
+}
+
+func (e *Exfil) strictB32(p []byte) string {
+	n := strictB32Encoding.EncodedLen(len(p))
+	if cap(e.b32Buf) < n {
+		e.b32Buf = make([]byte, n)
+	} else {
+		e.b32Buf = e.b32Buf[:n]
+	}
+	strictB32Encoding.Encode(e.b32Buf, p)
 	// Lower-case to keep with normal DNS label style.
-	b := make([]byte, len(out))
-	for i := 0; i < len(out); i++ {
-		c := out[i]
+	for i := 0; i < len(e.b32Buf); i++ {
+		c := e.b32Buf[i]
 		if c >= 'A' && c <= 'Z' {
 			c += 32
 		}
-		b[i] = c
+		e.b32Buf[i] = c
 	}
-	return string(b)
+	return string(e.b32Buf)
 }

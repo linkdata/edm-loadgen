@@ -39,7 +39,10 @@ func (d *DGA) Next(ctx context.Context) (q Query, err error) {
 	d.st.RLock()
 	family := d.st.DGA.Family
 	lo, hi := d.st.DGA.LengthMin, d.st.DGA.LengthMax
-	tlds := append([]string(nil), d.st.DGA.TLDs...)
+	tld := "com"
+	if len(d.st.DGA.TLDs) > 0 {
+		tld = d.st.DGA.TLDs[d.rng.IntN(len(d.st.DGA.TLDs))]
+	}
 	d.st.RUnlock()
 	if hi <= lo {
 		hi = lo + 1
@@ -66,10 +69,6 @@ func (d *DGA) Next(ctx context.Context) (q Query, err error) {
 		default:
 			label = conficker(d.rng, lo, hi)
 		}
-	}
-	tld := "com"
-	if len(tlds) > 0 {
-		tld = tlds[d.rng.IntN(len(tlds))]
 	}
 	qname := label + "." + tld
 

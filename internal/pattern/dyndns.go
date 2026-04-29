@@ -36,12 +36,14 @@ func (d *DynDNS) Name() string { return "dyndns" }
 // Next picks a provider and prepends a random hex label.
 func (d *DynDNS) Next(ctx context.Context) (q Query, err error) {
 	d.st.RLock()
-	providers := append([]string(nil), d.st.DynDNS.Providers...)
-	d.st.RUnlock()
-	if len(providers) == 0 {
-		providers = []string{"no-ip.com"}
+	provider := ""
+	if len(d.st.DynDNS.Providers) > 0 {
+		provider = d.st.DynDNS.Providers[d.rng.IntN(len(d.st.DynDNS.Providers))]
 	}
-	provider := providers[d.rng.IntN(len(providers))]
+	d.st.RUnlock()
+	if provider == "" {
+		provider = "no-ip.com"
+	}
 
 	var raw [4]byte
 	for i := range raw {

@@ -43,3 +43,31 @@ func TestResponseRoundTrip(t *testing.T) {
 		t.Errorf("Answer A = %s, want 192.0.2.1", a.A)
 	}
 }
+
+func TestBuilderResponseRoundTrip(t *testing.T) {
+	rr, err := mdns.NewRR(`example.com. 300 IN TXT "v=spf1 -all"`)
+	if err != nil {
+		t.Fatalf("NewRR: %v", err)
+	}
+	var builder Builder
+	b, err := builder.Response(0xbeef, "example.com", mdns.TypeTXT, []mdns.RR{rr})
+	if err != nil {
+		t.Fatalf("Builder.Response: %v", err)
+	}
+	got := new(mdns.Msg)
+	if err := got.Unpack(b); err != nil {
+		t.Fatalf("Unpack: %v", err)
+	}
+	if got.Id != 0xbeef {
+		t.Errorf("Id = %x, want 0xbeef", got.Id)
+	}
+	if len(got.Question) != 1 || got.Question[0].Qtype != mdns.TypeTXT {
+		t.Errorf("Question = %+v", got.Question)
+	}
+	if len(got.Answer) != 1 {
+		t.Fatalf("Answer count = %d, want 1", len(got.Answer))
+	}
+	if txt, ok := got.Answer[0].(*mdns.TXT); !ok || len(txt.Txt) != 1 || txt.Txt[0] != "v=spf1 -all" {
+		t.Fatalf("Answer[0] = %#v, want TXT v=spf1 -all", got.Answer[0])
+	}
+}

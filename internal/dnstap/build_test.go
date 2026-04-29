@@ -98,3 +98,72 @@ func TestNewClientResponseIPv6(t *testing.T) {
 		t.Errorf("QueryAddress length = %d, want 16", got)
 	}
 }
+
+func TestClientResponseBuilderRoundTrip(t *testing.T) {
+	rr, err := mdns.NewRR("example.com. 300 IN A 192.0.2.1")
+	if err != nil {
+		t.Fatalf("NewRR: %v", err)
+	}
+	msg := &mdns.Msg{
+		MsgHdr:   mdns.MsgHdr{Id: 0xabcd, Response: true},
+		Question: []mdns.Question{{Name: "example.com.", Qtype: mdns.TypeA, Qclass: mdns.ClassINET}},
+		Answer:   []mdns.RR{rr},
+	}
+	dnsBytes, err := msg.Pack()
+	if err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+	when := time.Date(2026, 4, 28, 12, 0, 0, 123_000_000, time.UTC)
+
+	var builder ClientResponseBuilder
+	wire, err := builder.MarshalClientResponse(Query{
+		SrcIP: netip.MustParseAddr("203.0.113.5"),
+		DstIP: netip.MustParseAddr("198.51.100.10"),
+		At:    when,
+		DNS:   dnsBytes,
+	})
+	if err != nil {
+		t.Fatalf("MarshalClientResponse: %v", err)
+	}
+	got := new(dnstap.Dnstap)
+	if err := proto.Unmarshal(wire, got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.Message.GetType() != dnstap.Message_CLIENT_RESPONSE {
+		t.Errorf("Message.Type = %v, want CLIENT_RESPONSE", got.Message.GetType())
+	}
+	if got.Message.GetSocketFamily() != dnstap.SocketFamily_INET {
+		t.Errorf("SocketFamily = %v, want INET", got.Message.GetSocketFamily())
+	}
+	if got.Message.GetResponseTimeNsec() != 123_000_000 {
+		t.Errorf("ResponseTimeNsec = %d, want 123000000", got.Message.GetResponseTimeNsec())
+	}
+	parsed := new(mdns.Msg)
+	if err := parsed.Unpack(got.Message.ResponseMessage); err != nil {
+		t.Fatalf("ResponseMessage Unpack: %v", err)
+	}
+	if len(parsed.Question) != 1 || parsed.Question[0].Name != "example.com." {
+		t.Errorf("ResponseMessage question = %+v", parsed.Question)
+	}
+}
+
+func TestClientResponseBuilderIPv6(t *testing.T) {
+	var builder ClientResponseBuilder
+	wire, err := builder.MarshalClientResponse(Query{
+		SrcIP: netip.MustParseAddr("2001:db8::1"),
+		DstIP: netip.MustParseAddr("2001:db8::53"),
+	})
+	if err != nil {
+		t.Fatalf("MarshalClientResponse: %v", err)
+	}
+	got := new(dnstap.Dnstap)
+	if err := proto.Unmarshal(wire, got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.Message.GetSocketFamily() != dnstap.SocketFamily_INET6 {
+		t.Errorf("SocketFamily = %v, want INET6", got.Message.GetSocketFamily())
+	}
+	if got := len(got.Message.QueryAddress); got != 16 {
+		t.Errorf("QueryAddress length = %d, want 16", got)
+	}
+}
