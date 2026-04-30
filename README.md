@@ -19,7 +19,6 @@ Two front-ends:
 
 Single static binary, ~12 MiB. No external runtime deps.
 
-
 ## Build
 
 ```bash
