@@ -25,7 +25,7 @@ Single static binary, ~12 MiB. No external runtime deps.
 go build -o edm-loadgen ./cmd/edm-loadgen
 ```
 
-Go 1.24+ is required. The dnstap and Frame Streams libs are pinned to the
+Go 1.27+ is required. The dnstap and Frame Streams libs are pinned to the
 versions EDM uses (`github.com/dnstap/golang-dnstap@v0.4.0`,
 `github.com/farsightsec/golang-framestream@v0.3.0`) so envelopes are
 byte-compatible.
